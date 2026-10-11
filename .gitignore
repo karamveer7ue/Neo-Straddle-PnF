@@ -1,0 +1,23 @@
+# Secrets - real credentials live only in .env
+.env
+.env.*
+!.env.sample
+
+# Local state written by the app
+.pnf-config.json
+logs/
+*.log
+*.csv
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
