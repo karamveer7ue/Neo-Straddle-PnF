@@ -35,10 +35,14 @@ It can run at the same time as the live app (`python -m pnf`, port 8765).
 ## How a run works
 
 - **One continuous run:** the trading days between the two dates play back-to-back on one chart, like the live page's multi-day view; weekends and holidays are skipped automatically.
+- **Context day:** the trading session just before the From date (weekends and holidays skipped) is already drawn when the run loads, and the replay starts at the From date's first minute.
+  The charts therefore start with history, as on the live page: SMA 10 has values from the first minute, signals are judged against the previous day's columns, and the box size comes from the context day's first close.
+  VWAP itself restarts at each session's open, so the context day shows its own VWAP line and the From date's VWAP starts fresh at 09:15.
+  The context day is not replayed and stays on the chart when you go back along the timeline; if a contract had not traded yet that day, its chart starts at the From date.
 - **Strikes** are fixed for the whole run, from the start day's index open (or the ATM you set).
-- **Box size** is 0.5% of the run's first straddle close, with a 3-box reversal; VWAP restarts at each session's open.
+- **Box size** is 0.5% of the first straddle close on the chart (the context day's), with a 3-box reversal; VWAP restarts at each session's open.
 - **Prices move within each minute:** the history API serves 1-minute candles, so each minute is played along its candle's likely path in four steps (open, the two extremes, close; a rising candle dips first, a falling one rallies first). The straddles, the forming boxes on the charts and the spot all move, and the minute's bar is completed at its close. For the straddle, the CE and PE paths are added step by step, which approximates the straddle's true path within the minute.
-- **Signals:** double top buy and double bottom sell are marked on the charts and alert with a toast, a panel flash and a chime (marked "simulation"); as on the live page, a double bottom sell alerts only when the straddle is below its VWAP. Alerts fire only while playing: jumping along the timeline rebuilds the charts silently. Toasts close themselves after 12 seconds (hover to keep one open). Simulated alerts are never written to the live page's alert log.
+- **Signals:** double top buy and double bottom sell are marked on the charts. As on the live page, only a double bottom sell below VWAP raises an alert (a toast, a panel flash and a chime, marked "simulation"); double top buys are marked only. Alerts fire only while playing: jumping along the timeline rebuilds the charts silently. Toasts close themselves after 12 seconds (hover to keep one open). Simulated alerts are never written to the live page's alert log.
 
 ## Simulated trades
 
@@ -66,7 +70,7 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
 | Path | Purpose |
 | --- | --- |
 | `pnf_sim/app.py` | FastAPI server: the page, `GET /api/options`, `POST /api/simulate`; serves the live app's static files read-only at `/static`. |
-| `pnf_sim/replay.py` | Builds a run: date checks, expiries offered, strikes from the start day's open, the straddle series with CE and PE prices, previous closes for the spot. |
+| `pnf_sim/replay.py` | Builds a run: date checks, expiries offered, the context day before the run, strikes from the start day's open, the straddle series with CE and PE prices and each minute's price path, previous closes for the spot. |
 | `pnf_sim/static/simulator.html`, `simulator.js`, `sim.css` | The page. |
 | `pnf_sim/static/player.js` | The replay clock (speed, pause, seek); no DOM, unit-tested in Node. |
 | `pnf_sim/static/trades.js` | Simulated short-straddle trades and their P&L; no DOM, unit-tested in Node. |

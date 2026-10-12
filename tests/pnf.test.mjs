@@ -183,7 +183,7 @@ test('each column carries the intraday VWAP from when it last updated', () => {
 
 // ---------------- Alert filter ----------------
 
-test('double bottom sell alerts only below VWAP; double top buy always alerts', async () => {
+test('only a double bottom sell below VWAP alerts; a double top buy never does', async () => {
   const { alertWanted } = await import('../pnf/static/pnf.js');
   const sell = { type: 'sell' };
   const buy = { type: 'buy' };
@@ -191,6 +191,7 @@ test('double bottom sell alerts only below VWAP; double top buy always alerts', 
   assert.equal(alertWanted(sell, 310, 300), false); // above VWAP
   assert.equal(alertWanted(sell, 300, 300), false); // at VWAP is not below it
   assert.equal(alertWanted(sell, 290, null), false); // VWAP not known yet
-  assert.equal(alertWanted(buy, 310, 300), true);
-  assert.equal(alertWanted(buy, 290, null), true);
+  assert.equal(alertWanted(buy, 290, 300), false); // even below VWAP
+  assert.equal(alertWanted(buy, 310, 300), false);
+  assert.equal(alertWanted(buy, 290, null), false);
 });

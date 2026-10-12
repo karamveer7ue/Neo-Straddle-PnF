@@ -176,3 +176,40 @@ def test_lot_size_falls_back_when_the_contract_list_fails():
     )
     run = asyncio.run(build_run(FakeGateway(lot_size=None), req))
     assert run["lotSize"] == 20
+
+
+def test_the_session_before_the_run_is_drawn_as_context():
+    gw = FakeGateway(options_from=date(2026, 10, 7))
+    req = SimRequest(UNDERLYINGS["NIFTY"], date(2026, 10, 13), date(2026, 10, 8), date(2026, 10, 9), atm=None)
+    run = asyncio.run(build_run(gw, req))
+    assert run["contextDate"] == "2026-10-07"
+    assert run["sessions"] == ["2026-10-08", "2026-10-09"]  # the replayed days
+    assert run["replayStart"] == ts(date(2026, 10, 8), 9, 15)
+    series = run["charts"][1]["series"]
+    assert len(series) == 9 and series[0][0] == ts(date(2026, 10, 7), 9, 15)  # 3 context + 6 replay minutes
+    assert run["atm"] == 22300  # strikes still from the start day's open
+    # The context day and the run fit one request per leg.
+    assert ("nse_fo|22300CE", date(2026, 10, 7), date(2026, 10, 9)) in gw.calls
+
+
+def test_context_day_is_fetched_separately_when_the_span_exceeds_30_days():
+    gw = FakeGateway(options_from=date(2026, 10, 7))
+    start, end = date(2026, 10, 8), date(2026, 11, 6)  # a full 30-day run
+    req = SimRequest(UNDERLYINGS["NIFTY"], date(2026, 11, 10), start, end, atm=None)
+    asyncio.run(build_run(gw, req))
+    leg = [c[1:] for c in gw.calls if c[0] == "nse_fo|22300CE"]
+    assert leg == [(date(2026, 10, 7), date(2026, 10, 7)), (start, end)]
+
+
+def test_a_contract_not_trading_on_the_context_day_starts_at_the_run():
+    run = asyncio.run(
+        build_run(
+            FakeGateway(),
+            SimRequest(  # options trade from 8 Oct only
+                UNDERLYINGS["NIFTY"], date(2026, 10, 13), date(2026, 10, 8), date(2026, 10, 9), atm=None
+            ),
+        )
+    )
+    assert run["contextDate"] == "2026-10-07"
+    assert run["charts"][1]["series"][0][0] == run["replayStart"]
+    assert not any(c["error"] for c in run["charts"])

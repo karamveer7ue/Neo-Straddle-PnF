@@ -117,7 +117,12 @@ async def build_run(gw: NeoGateway, req: SimRequest) -> dict:
     sessions = sorted({session_date(ts) for ts in index})
     if not sessions:
         raise SimError(f"No {u.key} trading sessions between {req.start:%d %b} and {req.end:%d %b %Y}.")
-    prev_closes = await _previous_closes(gw, u, req.start, index, sessions)
+    earlier = await _index_before(gw, u, req.start)
+    # The session just before the run is drawn as context, so the replay starts on a chart
+    # that already has history (SMA, signals and box size as on the live page).
+    context_day = max((session_date(ts) for ts in earlier), default=None)
+    prev_closes = _previous_closes(earlier, index, sessions)
+    replay_start = min(index)  # first minute of the run proper
 
     first_open = index[min(index)][0]
     atm_auto = round_to_strike(first_open, u.strike_step)
@@ -135,10 +140,10 @@ async def build_run(gw: NeoGateway, req: SimRequest) -> dict:
             chart["error"] = f"No {u.key} {strike} straddle listed for the {req.expiry:%d %b %Y} expiry."
         else:
             chart["ce"], chart["pe"] = ce["symbol"], pe["symbol"]
-            ce_candles = session_candles(await gw.history(ce["key"], req.start, req.end))
-            pe_candles = session_candles(await gw.history(pe["key"], req.start, req.end))
+            ce_candles = await _leg_candles(gw, ce["key"], context_day, req.start, req.end)
+            pe_candles = await _leg_candles(gw, pe["key"], context_day, req.start, req.end)
             chart["series"] = straddle_rows(ce_candles, pe_candles)
-            if not chart["series"]:
+            if not any(row[0] >= replay_start for row in chart["series"]):
                 chart["error"] = (
                     f"The {strike} straddle of the {req.expiry:%d %b} expiry has no trades on these dates "
                     "(it may not have been listed yet). Try later dates or a nearer expiry."
@@ -153,6 +158,8 @@ async def build_run(gw: NeoGateway, req: SimRequest) -> dict:
         "start": req.start.isoformat(),
         "end": req.end.isoformat(),
         "sessions": [d.isoformat() for d in sessions],
+        "contextDate": context_day.isoformat() if context_day else None,
+        "replayStart": replay_start,  # minutes before this are context, drawn at load
         "indexOpen": first_open,
         "atm": atm,
         "atmAuto": atm_auto,
@@ -164,26 +171,42 @@ async def build_run(gw: NeoGateway, req: SimRequest) -> dict:
     }
 
 
-async def _previous_closes(gw: NeoGateway, u: Underlying, start: date, index: dict, sessions: list[date]):
-    """Each session's previous index close: the day before's last minute.
-
-    The first session's comes from a separate request for the days before
-    the run (best effort - the change is just not shown if it fails).
-    """
-    out = {}
+async def _index_before(gw: NeoGateway, u: Underlying, start: date) -> dict[int, list[float]]:
+    """Index candles for the days just before the run (best effort: {} if unavailable)."""
     try:
-        earlier = session_candles(
+        return session_candles(
             await gw.history(
                 f"{u.index_segment}|{u.index_token}", start - timedelta(days=10), start - timedelta(days=1)
             )
         )
-        if earlier:
-            out[sessions[0]] = earlier[max(earlier)][3]
-    except Exception as exc:  # display-only
-        log.warning("Previous close before %s unavailable: %s", start, str(exc)[:200])
+    except Exception as exc:  # context and the first day's change are optional
+        log.warning("Index history before %s unavailable: %s", start, str(exc)[:200])
+        return {}
+
+
+def _previous_closes(earlier: dict, index: dict, sessions: list[date]) -> dict[date, float]:
+    """Each session's previous index close: the day before's last minute."""
+    out = {}
+    if earlier:
+        out[sessions[0]] = earlier[max(earlier)][3]
     for prev, day in pairwise(sessions):
         out[day] = index[max(ts for ts in index if session_date(ts) == prev)][3]
     return out
+
+
+async def _leg_candles(gw: NeoGateway, neosymbol: str, context_day: date | None, start: date, end: date):
+    """One leg's candles for the context day plus the run.
+
+    One request when the whole span fits the API's 30-day limit, otherwise
+    the context day separately (the run itself is already within the limit).
+    """
+    if context_day is None:
+        return session_candles(await gw.history(neosymbol, start, end))
+    if (end - context_day).days + 1 <= MAX_RANGE_DAYS:
+        return session_candles(await gw.history(neosymbol, context_day, end))
+    candles = session_candles(await gw.history(neosymbol, context_day, context_day))
+    candles.update(session_candles(await gw.history(neosymbol, start, end)))
+    return candles
 
 
 # Used only if the contract list cannot be read; lot sizes change over time, so the

@@ -225,7 +225,8 @@ function startRun(run) {
   state.started = false;
   const all = new Set(run.spot.map((s) => s[0]));
   for (const c of run.charts) for (const b of c.series) all.add(b[0]);
-  state.minutes = [...all].sort((a, b) => a - b);
+  // Minutes before replayStart belong to the context day: drawn at load, not replayed.
+  state.minutes = [...all].filter((ts) => ts >= run.replayStart).sort((a, b) => a - b);
 
   buildPanels(run.charts);
   state.player = new Player(state.minutes.length, { onStep: (i) => reveal(i, true), onState: renderPlayback });
@@ -242,7 +243,10 @@ function startRun(run) {
   const atmFrom = run.atm === run.atmAuto
     ? `ATM ${fmtStrike(run.atm)} from the ${fmtDate(run.sessions[0])} open (${fmtPrice(run.indexOpen)})`
     : `ATM ${fmtStrike(run.atm)} (set by you)`;
-  showBanner(`Loaded ${run.sessions.length} session${run.sessions.length > 1 ? 's' : ''} (${days}) · ` +
+  const context = run.contextDate
+    ? ` · ${fmtDate(run.contextDate, { weekday: 'short', day: '2-digit', month: 'short' })} already drawn as context`
+    : '';
+  showBanner(`Loaded ${run.sessions.length} session${run.sessions.length > 1 ? 's' : ''} (${days})${context} · ` +
     `${fmtDate(run.expiry)} expiry · ${atmFrom}. Press Play.`, 'ok');
 }
 
