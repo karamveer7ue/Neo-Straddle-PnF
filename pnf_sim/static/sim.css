@@ -1,0 +1,99 @@
+/* Simulator-only additions on top of the live page's /static/style.css. */
+
+.controls input[type="date"] { width: 132px; }
+.controls #atm { width: 88px; }
+
+/* Row 2: playback */
+.playbar {
+  display: flex;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.icon-btn.play {
+  width: auto;
+  gap: 6px;
+  padding: 0 12px 0 10px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.icon-btn.play:disabled { background: var(--surface-2); border-color: var(--border); color: var(--text-3); }
+.icon-btn.play .i-pause { display: none; }
+.icon-btn.play[aria-pressed="true"] .i-play { display: none; }
+.icon-btn.play[aria-pressed="true"] .i-pause { display: inline; }
+.icon-btn:disabled { opacity: 0.45; cursor: default; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+
+.timeline {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.timeline input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Time left until the next simulated minute is revealed */
+.next-minute {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.next-minute i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 128px;
+}
+
+.sim-time {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-count {
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-empty {
+  grid-column: 1 / -1;
+  align-self: center;
+  justify-self: center;
+  color: var(--text-2);
+}
+
+.banner.ok { background: color-mix(in srgb, var(--up) 12%, var(--surface)); }
+
+@media (max-width: 1366px) {
+  .controls input[type="date"] { width: 124px; }
+}
+
+/* Keep "+12.30 (+1.25%) vs open" on one line; the CE/PE/VWAP/SMA line gives way with an ellipsis. */
+.panel-head .ph-main { flex: 1; min-width: 0; }
+.panel-head .ph-chg { white-space: nowrap; }

@@ -1,0 +1,578 @@
+// Straddle simulator page: replays past sessions minute by minute.
+//
+// Reuses the live page's modules unchanged (P&F engine, chart renderer,
+// alerts). The server returns a whole run at once; this page reveals it one
+// market minute at a time through the Player clock.
+
+import { raiseAlert, setSoundEnabled, soundEnabled } from '/static/alerts.js';
+import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from '/static/chart.js';
+import { Player, SPEEDS } from './player.js';
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  underlyings: $('underlyings'),
+  setup: $('setup'),
+  expiry: $('expiry'),
+  start: $('start'),
+  end: $('end'),
+  atm: $('atm'),
+  load: $('load'),
+  play: $('play'),
+  playLabel: $('play-label'),
+  restart: $('restart'),
+  speeds: $('speeds'),
+  seek: $('seek'),
+  nextMinute: $('next-minute-bar'),
+  clock: $('clock'),
+  spotBox: $('spot-box'),
+  simTime: $('sim-time'),
+  simCount: $('sim-count'),
+  spot: $('spot'),
+  spotStat: $('spot-stat'),
+  spotChg: $('spot-chg'),
+  overlays: $('overlays'),
+  zoomIn: $('zoom-in'),
+  zoomOut: $('zoom-out'),
+  zoomFit: $('zoom-fit'),
+  sound: $('sound'),
+  banner: $('banner'),
+  bannerText: $('banner-text'),
+  charts: $('charts'),
+  empty: $('sim-empty'),
+  template: $('panel-template'),
+  tooltip: $('tooltip'),
+};
+
+const SIGNAL_NAMES = { buy: 'Double top buy', sell: 'Double bottom sell' };
+const FLASH_MS = 8000;
+const SPEED_KEY = 'pnf.sim.speed';
+const OVERLAYS_KEY = 'pnf.overlays'; // shared with the live page
+
+const state = {
+  underlying: 'NIFTY',
+  options: null, // /api/options for the selected index
+  run: null, // /api/simulate result
+  minutes: [], // every market minute in the run, in order
+  bars: new Map(), // chart key -> Map(ts -> bar)
+  spot: new Map(), // ts -> index price
+  panels: new Map(), // chart key -> {root, panel, def}
+  player: null,
+  speed: readStored(SPEED_KEY, 1, (v) => SPEEDS.includes(v)),
+  overlays: readOverlays(),
+  cellOverride: null,
+  alerted: new Set(),
+  started: false, // Play pressed at least once since the run loaded
+  formingKey: '', // which in-minute step is on screen, so each is drawn once
+  formingSpot: null,
+};
+
+// ---------------- Small helpers ----------------
+
+function readStored(key, fallback, valid) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key));
+    return valid(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function store(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage unavailable: the choice lasts for this page only
+  }
+}
+
+function readOverlays() {
+  return readStored(OVERLAYS_KEY, { vwap: true, sma: true },
+    (v) => v && typeof v.vwap === 'boolean' && typeof v.sma === 'boolean');
+}
+
+const signed = (v, digits = 2) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}`;
+const offsetLabel = (off) => (off === 0 ? 'ATM' : `ATM ${off > 0 ? '+' : '−'} ${Math.abs(off)}`);
+const fmtStrike = (s) => s.toLocaleString('en-IN');
+const fmtDate = (iso, opts = { day: '2-digit', month: 'short' }) =>
+  new Date(`${iso}T00:00:00+05:30`).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', ...opts });
+
+function setChange(el, value, base, suffix = '') {
+  if (value == null || base == null || !base) {
+    el.replaceChildren();
+    el.classList.remove('up', 'down');
+    return;
+  }
+  const diff = value - base;
+  const abs = document.createElement('span');
+  abs.className = 'abs';
+  abs.textContent = `${signed(diff)} `;
+  el.replaceChildren(abs, `(${signed((diff / base) * 100)}%)${suffix}`);
+  el.classList.toggle('up', diff >= 0);
+  el.classList.toggle('down', diff < 0);
+}
+
+function showBanner(text, kind = '') {
+  els.banner.hidden = !text;
+  els.banner.className = `banner ${kind}`;
+  els.bannerText.textContent = text;
+}
+
+async function api(url, body) {
+  const res = await fetch(url, body
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    : undefined);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join('; ') : data.detail;
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
+  return data;
+}
+
+// ---------------- Setup row ----------------
+
+function renderUnderlyings(keys) {
+  els.underlyings.replaceChildren(...keys.map((key) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = key;
+    btn.setAttribute('aria-pressed', String(key === state.underlying));
+    btn.addEventListener('click', () => {
+      if (key === state.underlying) return;
+      state.underlying = key;
+      els.atm.value = '';
+      loadOptions();
+    });
+    return btn;
+  }));
+}
+
+async function loadOptions() {
+  try {
+    const opts = await api(`/api/options?underlying=${state.underlying}`);
+    state.options = opts;
+    renderUnderlyings(opts.underlyings);
+    els.expiry.replaceChildren(...opts.expiries.map((iso) =>
+      new Option(`${fmtDate(iso)} · ${fmtDate(iso, { weekday: 'short' })}`, iso)));
+    for (const input of [els.start, els.end]) {
+      input.max = opts.latestDate; // only past sessions
+      if (!input.value || input.value > opts.latestDate) {
+        input.value = input === els.start ? opts.defaultStart : opts.defaultEnd;
+      }
+    }
+    els.atm.step = String(opts.underlying.strikeStep);
+    els.atm.placeholder = 'Auto';
+    showBanner('');
+  } catch (err) {
+    showBanner(`Could not load the expiries: ${err.message}`, 'error');
+  }
+}
+
+function validate() {
+  const { start, end } = { start: els.start.value, end: els.end.value };
+  const opts = state.options;
+  if (!start || !end) return 'Pick a start and an end date.';
+  if (end >= opts.today) return `The end date must be before today (${fmtDate(opts.today, { day: '2-digit', month: 'short', year: 'numeric' })}).`;
+  if (start > end) return 'The start date must be on or before the end date.';
+  const days = (new Date(end) - new Date(start)) / 86_400_000 + 1;
+  if (days > opts.maxRangeDays) return `Pick at most ${opts.maxRangeDays} days.`;
+  const atm = els.atm.value ? Number(els.atm.value) : null;
+  if (atm !== null && (!Number.isInteger(atm) || atm % opts.underlying.strikeStep)) {
+    return `${state.underlying} ATM must be a multiple of ${opts.underlying.strikeStep}.`;
+  }
+  return null;
+}
+
+els.setup.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const problem = validate();
+  if (problem) {
+    showBanner(problem, 'error');
+    return;
+  }
+  state.player?.pause();
+  const body = {
+    underlying: state.underlying,
+    expiry: els.expiry.value,
+    start: els.start.value,
+    end: els.end.value,
+    atm: els.atm.value ? Number(els.atm.value) : null,
+  };
+  els.load.disabled = true;
+  els.load.textContent = 'Loading...';
+  showBanner(`Loading ${state.underlying} straddles for ${fmtDate(body.start)} – ${fmtDate(body.end)} ` +
+    '(history requests are paced, so this takes about 15 seconds)...');
+  try {
+    startRun(await api('/api/simulate', body));
+  } catch (err) {
+    showBanner(err.message, 'error');
+  } finally {
+    els.load.disabled = false;
+    els.load.textContent = 'Load';
+  }
+});
+
+// ---------------- Run ----------------
+
+function startRun(run) {
+  state.run = run;
+  state.alerted.clear();
+  state.bars = new Map(run.charts.map((c) => [c.key, new Map(c.series.map((b) => [b[0], b]))]));
+  state.spot = new Map(run.spot.map((s) => [s[0], s[1]]));
+  state.spotRows = new Map(run.spot.map((s) => [s[0], s]));
+  state.started = false;
+  const all = new Set(run.spot.map((s) => s[0]));
+  for (const c of run.charts) for (const b of c.series) all.add(b[0]);
+  state.minutes = [...all].sort((a, b) => a - b);
+
+  buildPanels(run.charts);
+  state.player = new Player(state.minutes.length, { onStep: (i) => reveal(i, true), onState: renderPlayback });
+  state.player.setSpeed(state.speed);
+  els.seek.max = String(state.minutes.length - 1);
+  els.seek.disabled = false;
+  els.play.disabled = false;
+  els.restart.disabled = false;
+  els.clock.hidden = false;
+  els.spotBox.hidden = false;
+  reveal(0, false);
+
+  const days = run.sessions.map((d) => fmtDate(d)).join(', ');
+  const atmFrom = run.atm === run.atmAuto
+    ? `ATM ${fmtStrike(run.atm)} from the ${fmtDate(run.sessions[0])} open (${fmtPrice(run.indexOpen)})`
+    : `ATM ${fmtStrike(run.atm)} (set by you)`;
+  showBanner(`Loaded ${run.sessions.length} session${run.sessions.length > 1 ? 's' : ''} (${days}) · ` +
+    `${fmtDate(run.expiry)} expiry · ${atmFrom}. Press Play.`, 'ok');
+}
+
+function buildPanels(charts) {
+  els.charts.replaceChildren();
+  state.panels.clear();
+  for (const def of charts) {
+    const root = els.template.content.firstElementChild.cloneNode(true);
+    root.classList.toggle('atm', def.offset === 0);
+    els.charts.append(root);
+    const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip });
+    panel.setCell(state.cellOverride);
+    panel.setOverlays(state.overlays);
+    state.panels.set(def.key, { root, panel, def });
+  }
+}
+
+/**
+ * Show the run as of minute i. While playing, each new minute's bar is added
+ * to the charts (and new signals alert); a jump rebuilds the charts silently.
+ */
+function reveal(i, stepping) {
+  const ts = state.minutes[i];
+  for (const entry of state.panels.values()) {
+    const bar = state.bars.get(entry.def.key).get(ts);
+    entry.liveLegs = null;
+    if (stepping) {
+      if (bar) alertSignals(entry, entry.panel.addBar(bar));
+    } else {
+      entry.panel.setLive(null);
+      entry.panel.setSeries(entry.def.series.filter((b) => b[0] <= ts));
+    }
+    renderPanelHead(entry);
+  }
+  state.formingKey = '';
+  state.formingSpot = null;
+  renderClock();
+}
+
+/**
+ * Play the minute in progress along its price path (open, extremes, close):
+ * the charts show it as forming boxes, like live ticks on the live page.
+ * Step k of PATH_STEPS is shown once the minute is k / PATH_STEPS done.
+ */
+function showFormingMinute() {
+  const p = state.player;
+  const next = p ? p.index + 1 : 0;
+  if (!p || next >= state.minutes.length || !(p.playing || p.progress > 0)) return;
+  const steps = state.run.pathSteps;
+  const k = Math.min(steps - 1, Math.floor(p.progress * steps));
+  const key = `${next}:${k}`;
+  if (key === state.formingKey) return;
+  state.formingKey = key;
+  const ts = state.minutes[next];
+  for (const entry of state.panels.values()) {
+    const bar = state.bars.get(entry.def.key).get(ts);
+    if (bar) {
+      const [price, ce, pe] = bar[5][k];
+      // volume traded so far this minute, spread evenly over the steps
+      entry.panel.setLive({ ts, price, volume: Math.round((bar[2] * (k + 1)) / steps) });
+      entry.liveLegs = { ce, pe };
+    }
+    renderPanelHead(entry);
+  }
+  const spot = state.spotRows.get(ts);
+  state.formingSpot = spot ? spot[2][k] : null;
+  renderClock();
+}
+
+function seekTo(i) {
+  if (!state.player) return;
+  state.player.seek(i);
+  reveal(state.player.index, false);
+}
+
+// ---------------- Rendering ----------------
+
+function renderPanelHead(entry) {
+  const { root, def, panel } = entry;
+  const q = (sel) => root.querySelector(sel);
+  q('.ph-offset').textContent = offsetLabel(def.offset);
+  q('.ph-strike').textContent = `${fmtStrike(def.strike)} straddle`;
+  const last = panel.series[panel.series.length - 1];
+  const legs = entry.liveLegs ?? (last ? { ce: last[3], pe: last[4] } : null);
+  const price = panel.live?.price ?? last?.[1];
+
+  const parts = [legs ? `CE ${fmtPrice(legs.ce)} · PE ${fmtPrice(legs.pe)}` : ''];
+  const overlay = (cls, label, value) => {
+    const el = document.createElement('span');
+    el.className = cls;
+    el.textContent = `${label} ${value != null ? fmtPrice(value) : '–'}`;
+    parts.push(' · ', el);
+  };
+  if (last && state.overlays.vwap) overlay('ph-vwap', 'VWAP', panel.currentVwap);
+  if (last && state.overlays.sma) overlay('ph-sma', 'SMA10', panel.currentSma);
+  q('.ph-legs').replaceChildren(...parts);
+  q('.ph-legs').title = def.ce ? `${def.ce} + ${def.pe}` : '';
+
+  q('.ph-price').textContent = price != null ? fmtPrice(price) : '–';
+  const day = dateKey(panel.live?.ts ?? last?.[0] ?? 0);
+  const open = panel.series.find((b) => dateKey(b[0]) === day) ?? (panel.live ? [0, panel.live.price] : null);
+  setChange(q('.ph-chg'), price, open?.[1], ' vs open');
+
+  const pnf = panel.pnf;
+  q('.ph-meta-text').textContent = pnf
+    ? `Box ${fmtPrice(pnf.box)} (0.5% of ${fmtPrice(pnf.p0)}) · ${pnf.reversal}-box · ` +
+      `${pnf.columns.length} cols · since ${fmtDay(panel.series[0][0])}`
+    : ' ';
+  const s = panel.lastSignal;
+  const chip = q('.ph-signal');
+  chip.hidden = !s;
+  if (s) {
+    chip.className = `ph-signal ${s.type}`;
+    chip.textContent = `${s.type === 'buy' ? '▲ DT buy' : '▼ DB sell'} ${fmtTime(s.ts)}`;
+    chip.title = `Last signal: ${SIGNAL_NAMES[s.type]}, ${fmtDay(s.ts)} ${fmtTime(s.ts)}`;
+  }
+
+  const msg = q('.plot-msg');
+  let text = def.error ?? '';
+  if (!text && !state.started && !pnf?.columns.length) text = 'Press Play to start the replay.';
+  else if (!text && !panel.series.length && !panel.live) text = 'No trades yet at this point in the run.';
+  else if (!text && !pnf?.columns.length) {
+    text = `Waiting for the first ${fmtPrice(pnf?.box ?? 0)}-point (0.5%) box move...`;
+  }
+  msg.hidden = !text;
+  msg.textContent = text;
+  msg.classList.toggle('error', !!def.error);
+}
+
+function spotAt(ts) {
+  if (state.spot.has(ts)) return state.spot.get(ts);
+  let price = null; // carry the last known price through minutes without an index candle
+  for (const [t, p] of state.spot) {
+    if (t > ts) break;
+    price = p;
+  }
+  return price;
+}
+
+function renderClock() {
+  const p = state.player;
+  if (!p) return;
+  const ts = state.minutes[p.index];
+  // Simulated wall time: the revealed minute has closed, and the next one is under way.
+  const nextStart = state.minutes[p.index + 1] ?? ts + 60;
+  const now = p.atEnd ? ts + 60 : nextStart + Math.floor(p.progress * 60);
+  const secs = String(new Date(now * 1000).getUTCSeconds()).padStart(2, '0');
+  els.simTime.textContent = `${fmtDay(now)} ${fmtTime(now)}:${secs}`;
+  els.simCount.textContent = `minute ${p.index + 1} of ${state.minutes.length}`;
+  els.seek.value = String(p.index);
+  const spot = state.formingSpot ?? spotAt(ts);
+  els.spot.textContent = spot != null ? fmtPrice(spot) : '–';
+  setChange(els.spotChg, spot, state.run.spotPrevCloses[dateKey(ts)]);
+  els.spotStat.title = `${state.run.underlying.key} index (spot) at the simulated time`;
+}
+
+function renderPlayback() {
+  const p = state.player;
+  els.play.setAttribute('aria-pressed', String(!!p?.playing));
+  els.play.title = p?.playing ? 'Pause (Space)' : p?.atEnd ? 'Replay finished' : 'Play (Space)';
+  els.playLabel.textContent = p?.playing ? 'Pause' : 'Play';
+  els.play.disabled = !p || (p.atEnd && !p.playing);
+  for (const btn of els.speeds.children) btn.setAttribute('aria-pressed', String(Number(btn.dataset.speed) === state.speed));
+  if (p?.atEnd) showBanner('Replay finished. Drag the timeline or press Back to the start to watch again.', 'ok');
+}
+
+// The thin bar under the timeline: time left until the next minute is revealed.
+function animateNextMinute() {
+  const p = state.player;
+  els.nextMinute.style.width = `${p && !p.atEnd ? Math.round(p.progress * 1000) / 10 : 0}%`;
+  if (p?.playing) {
+    showFormingMinute();
+    renderClock();
+  }
+  requestAnimationFrame(animateNextMinute);
+}
+requestAnimationFrame(animateNextMinute);
+
+// ---------------- Alerts ----------------
+
+function alertSignals(entry, signals) {
+  for (const s of signals) {
+    const key = `${entry.def.key}:${s.type}:${s.ts}:${s.row}`;
+    if (state.alerted.has(key)) continue;
+    state.alerted.add(key);
+    const pnf = entry.panel.pnf;
+    raiseAlert({
+      type: s.type,
+      title: `${SIGNAL_NAMES[s.type]} · ${offsetLabel(entry.def.offset)} (simulation)`,
+      detail: `${state.run.underlying.key} ${fmtStrike(entry.def.strike)} straddle broke ` +
+        `${s.type === 'buy' ? 'above' : 'below'} ${fmtPrice(pnf.price(s.level))} → ` +
+        `${fmtPrice(pnf.price(s.row))} at ${fmtDay(s.ts)} ${fmtTime(s.ts)}`,
+    });
+    flashPanel(entry.root, s.type);
+  }
+}
+
+function flashPanel(root, type) {
+  root.classList.remove('flash-buy', 'flash-sell');
+  void root.offsetWidth; // restart the animation if it is already running
+  root.classList.add(`flash-${type}`);
+  clearTimeout(root.flashTimer);
+  root.flashTimer = setTimeout(() => root.classList.remove(`flash-${type}`), FLASH_MS);
+}
+
+// ---------------- Tooltip ----------------
+
+function showTooltip(desc, hover) {
+  const tip = els.tooltip;
+  if (!desc || !hover) {
+    tip.hidden = true;
+    return;
+  }
+  const dir = desc.dir.toLowerCase();
+  const signal = desc.signal
+    ? `<div class="tip-signal ${desc.signal}">${desc.signal === 'buy' ? '▲' : '▼'} ${SIGNAL_NAMES[desc.signal]}</div>`
+    : '';
+  const extra = (desc.vwap != null ? `<div class="tip-vwap">VWAP ${fmtPrice(desc.vwap)}</div>` : '') +
+    (desc.sma != null ? `<div class="tip-sma">SMA 10 ${fmtPrice(desc.sma)}</div>` : '');
+  tip.innerHTML = `${signal}<b class="${dir}">${desc.dir}</b> ${fmtPrice(desc.price)} ` +
+    `<span class="muted">· ${desc.when}</span>${extra}`;
+  tip.hidden = false;
+  const pad = 14;
+  const r = tip.getBoundingClientRect();
+  let x = hover.clientX + pad;
+  let y = hover.clientY + pad;
+  if (x + r.width > window.innerWidth - 8) x = hover.clientX - r.width - pad;
+  if (y + r.height > window.innerHeight - 8) y = hover.clientY - r.height - pad;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+
+// ---------------- Playback controls ----------------
+
+els.speeds.replaceChildren(...SPEEDS.map((speed) => {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.dataset.speed = String(speed);
+  btn.textContent = `${speed}X`;
+  const secs = (375 * 60) / speed; // a full session
+  const len = secs >= 3600 ? `${(secs / 3600).toFixed(2).replace(/\.?0+$/, '')} h`
+    : secs >= 60 ? `${Math.round(secs / 60)} min` : `${Math.round(secs)} s`;
+  btn.title = `${speed === 1 ? 'Real time' : `${speed}x real time`}: a full session takes about ${len}`;
+  btn.addEventListener('click', () => {
+    state.speed = speed;
+    store(SPEED_KEY, speed);
+    state.player?.setSpeed(speed);
+    renderPlayback();
+  });
+  return btn;
+}));
+
+function togglePlay() {
+  const p = state.player;
+  if (!p) return;
+  if (p.playing) p.pause();
+  else {
+    showBanner('');
+    if (!state.started) {
+      state.started = true;
+      for (const entry of state.panels.values()) renderPanelHead(entry);
+    }
+    p.play();
+  }
+}
+
+els.play.addEventListener('click', togglePlay);
+els.restart.addEventListener('click', () => seekTo(0));
+els.seek.addEventListener('input', () => seekTo(Number(els.seek.value)));
+
+document.addEventListener('keydown', (e) => {
+  if (!state.player || e.target.closest('input, select, textarea')) return;
+  if (e.key === ' ') {
+    e.preventDefault();
+    togglePlay();
+  } else if (e.key === 'ArrowRight') {
+    seekTo(state.player.index + 1);
+  } else if (e.key === 'ArrowLeft') {
+    seekTo(state.player.index - 1);
+  }
+});
+
+// ---------------- Overlays, zoom, sound ----------------
+
+function renderOverlayToggles() {
+  for (const btn of els.overlays.querySelectorAll('button')) {
+    btn.setAttribute('aria-pressed', String(state.overlays[btn.dataset.overlay]));
+  }
+}
+
+els.overlays.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-overlay]');
+  if (!btn) return;
+  state.overlays = { ...state.overlays, [btn.dataset.overlay]: !state.overlays[btn.dataset.overlay] };
+  store(OVERLAYS_KEY, state.overlays);
+  for (const entry of state.panels.values()) {
+    entry.panel.setOverlays(state.overlays);
+    renderPanelHead(entry);
+  }
+  renderOverlayToggles();
+});
+
+function setZoom(cellOverride) {
+  state.cellOverride = cellOverride;
+  for (const { panel } of state.panels.values()) panel.setCell(cellOverride);
+  els.zoomFit.setAttribute('aria-pressed', String(cellOverride == null));
+}
+
+function stepZoom(dir) {
+  const current = state.cellOverride ?? state.panels.values().next().value?.panel.cell ?? 12;
+  setZoom(dir > 0
+    ? CELL_STEPS.find((s) => s > current) ?? CELL_STEPS[CELL_STEPS.length - 1]
+    : CELL_STEPS.findLast((s) => s < current) ?? CELL_STEPS[0]);
+}
+
+els.zoomIn.addEventListener('click', () => stepZoom(1));
+els.zoomOut.addEventListener('click', () => stepZoom(-1));
+els.zoomFit.addEventListener('click', () => setZoom(null));
+
+function renderSound() {
+  const on = soundEnabled();
+  els.sound.setAttribute('aria-pressed', String(on));
+  els.sound.title = on ? 'Alert sounds on - click to mute' : 'Alert sounds muted - click to unmute';
+}
+
+els.sound.addEventListener('click', () => {
+  setSoundEnabled(!soundEnabled());
+  renderSound();
+});
+
+renderOverlayToggles();
+renderSound();
+setZoom(null);
+renderPlayback();
+loadOptions();

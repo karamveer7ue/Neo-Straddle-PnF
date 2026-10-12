@@ -553,6 +553,30 @@ button, input, select { font: inherit; color: inherit; }
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
   pointer-events: auto;
   animation: toast-in 0.18s ease-out;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Time left before the toast closes itself; paused while hovered. */
+.toast-timer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: currentColor;
+  opacity: 0.35;
+  transform-origin: left;
+  animation: toast-countdown linear forwards;
+}
+
+.toast.buy .toast-timer { color: var(--x); }
+.toast.sell .toast-timer { color: var(--o); }
+.toast.paused .toast-timer { animation-play-state: paused; }
+
+@keyframes toast-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
 }
 
 .toast.buy { border-left-color: var(--x); }

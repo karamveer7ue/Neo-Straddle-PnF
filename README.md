@@ -194,7 +194,7 @@ They never fire for boxes still forming, and reloading the page does not replay 
 
 Each alert gives you:
 
-- a toast in the bottom-left corner (over the oldest history, so it never hides the latest columns),
+- a toast in the bottom-left corner (over the oldest history, so it never hides the latest columns) that closes itself after 12 seconds, with a thin bar counting down; hovering keeps it open, and the alert log keeps the history,
 - a pulsing border on the affected panel,
 - a chime: rising notes for a buy, falling notes for a sell,
 - a system notification when the tab is in the background, if you have allowed notifications (the browser asks when you go live).

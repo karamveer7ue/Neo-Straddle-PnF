@@ -6,7 +6,7 @@
 // visual only and the toast says so.
 
 const SOUND_KEY = 'pnf.sound';
-const TOAST_LIFETIME_MS = 60_000;
+export const TOAST_LIFETIME_MS = 12_000; // toasts close themselves; hovering pauses the countdown
 const MAX_TOASTS = 5;
 
 let audio = null;
@@ -91,16 +91,42 @@ export function raiseAlert({ type, title, detail }) {
       <span class="toast-detail"></span>
       ${muted ? '<span class="toast-hint">Click anywhere on the page to enable alert sounds.</span>' : ''}
     </div>
-    <button type="button" class="toast-close" aria-label="Dismiss">×</button>`;
+    <button type="button" class="toast-close" aria-label="Dismiss">×</button>
+    <i class="toast-timer" aria-hidden="true"></i>`;
   toast.querySelector('b').textContent = title;
   toast.querySelector('.toast-detail').textContent = detail;
-  const dismiss = () => toast.remove();
-  toast.querySelector('.toast-close').addEventListener('click', dismiss);
-  setTimeout(dismiss, TOAST_LIFETIME_MS);
+  autoDismiss(toast, TOAST_LIFETIME_MS);
   box.prepend(toast);
   while (box.children.length > MAX_TOASTS) box.lastElementChild.remove();
 
   if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
     new Notification(title, { body: detail, tag: `${type}:${detail}` });
   }
+}
+
+/**
+ * Close a toast after `lifetime` ms, with a shrinking bar showing the time
+ * left. Hovering pauses the countdown so a toast being read never vanishes
+ * under the mouse; the close button dismisses it at once.
+ */
+function autoDismiss(toast, lifetime) {
+  const bar = toast.querySelector('.toast-timer');
+  bar.style.animationDuration = `${lifetime}ms`;
+  let remaining = lifetime;
+  let startedAt = performance.now();
+  let timer = setTimeout(() => toast.remove(), remaining);
+  toast.addEventListener('mouseenter', () => {
+    clearTimeout(timer);
+    remaining -= performance.now() - startedAt;
+    toast.classList.add('paused');
+  });
+  toast.addEventListener('mouseleave', () => {
+    startedAt = performance.now();
+    timer = setTimeout(() => toast.remove(), Math.max(0, remaining));
+    toast.classList.remove('paused');
+  });
+  toast.querySelector('.toast-close').addEventListener('click', () => {
+    clearTimeout(timer);
+    toast.remove();
+  });
 }

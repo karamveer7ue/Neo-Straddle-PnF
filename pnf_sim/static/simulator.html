@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Straddle Simulator</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/sim/sim.css">
+  <script type="module" src="/sim/simulator.js"></script>
+</head>
+<body>
+  <!-- Row 1: what to replay -->
+  <header class="topbar">
+    <div class="brand">
+      <h1 title="Replays past sessions minute by minute: Point &amp; Figure on 1-min closes, 0.5% box, 3-box reversal">Straddle simulator</h1>
+    </div>
+
+    <div class="segmented" id="underlyings" role="group" aria-label="Index"></div>
+
+    <form class="controls" id="setup" autocomplete="off">
+      <label class="field">
+        <span>Expiry</span>
+        <select id="expiry" aria-label="Expiry" required></select>
+      </label>
+      <label class="field">
+        <span>From</span>
+        <input id="start" type="date" required>
+      </label>
+      <label class="field">
+        <span>To</span>
+        <input id="end" type="date" required>
+      </label>
+      <label class="field">
+        <span>ATM</span>
+        <input id="atm" type="number" min="1000" max="1000000" inputmode="numeric" placeholder="Auto" title="Leave empty to use the strike nearest to the start day's open">
+      </label>
+      <button type="submit" class="btn primary" id="load">Load</button>
+    </form>
+  </header>
+
+  <!-- Row 2: playback -->
+  <div class="playbar" id="playbar">
+    <div class="zoom" role="group" aria-label="Playback">
+      <button type="button" class="icon-btn play" id="play" title="Play (Space)" disabled>
+        <svg class="i-play" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 4.5h3.5v15H7zM13.5 4.5H17v15h-3.5z" fill="currentColor"/></svg>
+        <span id="play-label">Play</span>
+      </button>
+      <button type="button" class="icon-btn" id="restart" title="Back to the start" disabled>
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6h6"/><path d="M5.5 15a7 7 0 1 0 1.6-7.3L5 10"/></svg>
+      </button>
+    </div>
+
+    <div class="segmented" id="speeds" role="group" aria-label="Speed"></div>
+
+    <div class="timeline">
+      <input id="seek" type="range" min="0" max="0" value="0" step="1" aria-label="Simulated time" disabled>
+      <div class="next-minute" aria-hidden="true"><i id="next-minute-bar"></i></div>
+    </div>
+
+    <div class="clock" id="clock" hidden>
+      <span class="sim-time" id="sim-time">&ndash;</span>
+      <span class="sim-count" id="sim-count"></span>
+    </div>
+
+    <div class="stats" id="spot-box" hidden>
+      <div class="stat" id="spot-stat">
+        <span class="label">Spot</span>
+        <span class="value" id="spot">&ndash;</span>
+        <span class="chg" id="spot-chg"></span>
+      </div>
+    </div>
+
+    <div class="segmented" id="overlays" role="group" aria-label="Overlays">
+      <button type="button" data-overlay="vwap" aria-pressed="true" title="Intraday VWAP of the straddle: CE + PE price weighted by CE + PE volume since 09:15">VWAP</button>
+      <button type="button" data-overlay="sma" aria-pressed="true" title="Simple moving average of the last 10 column midpoints">SMA 10</button>
+    </div>
+
+    <div class="zoom" role="group" aria-label="Zoom">
+      <button type="button" class="icon-btn" id="zoom-out" title="Smaller boxes">&minus;</button>
+      <button type="button" class="icon-btn fit" id="zoom-fit" title="Fit boxes to height">Fit</button>
+      <button type="button" class="icon-btn" id="zoom-in" title="Bigger boxes">+</button>
+    </div>
+
+    <div class="zoom alert-tools" role="group" aria-label="Alerts">
+      <button type="button" class="icon-btn sound" id="sound" aria-pressed="true" title="Alert sounds on">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          <path class="mute-slash" d="M3 3l18 18"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="banner" id="banner" hidden>
+    <span id="banner-text"></span>
+  </div>
+
+  <main class="charts" id="charts">
+    <p class="sim-empty" id="sim-empty">Pick an index, an expiry and a past date range, then press <b>Load</b>.</p>
+  </main>
+
+  <template id="panel-template">
+    <section class="panel">
+      <header class="panel-head">
+        <div class="ph-main">
+          <div class="ph-title"><span class="ph-offset"></span><span class="ph-strike"></span></div>
+          <div class="ph-legs"></div>
+        </div>
+        <div class="ph-quote">
+          <div class="ph-price">&ndash;</div>
+          <div class="ph-chg"></div>
+        </div>
+      </header>
+      <div class="ph-meta"><span class="ph-meta-text"></span><span class="ph-signal" hidden></span></div>
+      <div class="plot">
+        <canvas></canvas>
+        <div class="scroller"><div class="spacer"></div></div>
+        <div class="plot-msg" hidden></div>
+      </div>
+    </section>
+  </template>
+
+  <div class="tooltip" id="tooltip" hidden></div>
+  <div class="toasts" id="toasts" aria-live="assertive"></div>
+</body>
+</html>
