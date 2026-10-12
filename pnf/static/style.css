@@ -100,12 +100,6 @@ button, input, select { font: inherit; color: inherit; }
   letter-spacing: -0.01em;
 }
 
-.brand p {
-  margin: 1px 0 0;
-  color: var(--text-3);
-  font-size: 11.5px;
-}
-
 /* NIFTY | SENSEX switch */
 .segmented {
   display: inline-flex;
@@ -140,9 +134,23 @@ button, input, select { font: inherit; color: inherit; }
 #overlays button[data-overlay="vwap"][aria-pressed="true"] { color: var(--vwap); }
 #overlays button[data-overlay="sma"][aria-pressed="true"] { color: var(--sma); }
 
-.stats { display: flex; gap: 20px; }
+/* Spot and near-month future, stacked so they share one slot in the top bar */
+.stats {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  align-items: baseline;
+  gap: 1px 8px;
+}
 
-.stat { display: flex; align-items: baseline; gap: 6px; }
+.stat {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+}
+.stats .label { font-size: 10px; }
+.stats .value { font-size: 13px; text-align: right; }
+.stats .chg { font-size: 11.5px; }
 
 .label {
   color: var(--text-3);
@@ -240,18 +248,35 @@ button, input, select { font: inherit; color: inherit; }
 .icon-btn.fit { width: auto; padding: 0 9px; font-size: 12px; }
 .icon-btn.fit[aria-pressed="true"] { color: var(--accent); }
 
-.icon-btn.solo {
+.alert-tools .icon-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 0;
-  border-radius: 6px;
   color: var(--text-2);
 }
 
-.icon-btn.solo[aria-pressed="true"] { color: var(--accent); }
-.icon-btn.solo .mute-slash { display: none; }
-.icon-btn.solo[aria-pressed="false"] .mute-slash { display: inline; }
+.icon-btn.sound[aria-pressed="true"] { color: var(--accent); }
+.icon-btn.sound .mute-slash { display: none; }
+.icon-btn.sound[aria-pressed="false"] .mute-slash { display: inline; }
+.icon-btn.log[aria-expanded="true"] { color: var(--accent); }
+
+/* Unseen-alert count on the log button */
+.badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--down);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
 
 .feed { display: flex; align-items: center; gap: 8px; }
 
@@ -562,10 +587,65 @@ button, input, select { font: inherit; color: inherit; }
 
 .toast-close:hover { background: var(--surface-2); color: var(--text-1); }
 
+/* ---------------- Alert log ---------------- */
+
+.alert-log {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, calc(100vw - 32px));
+  max-height: min(70vh, 640px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.32);
+}
+
+.alert-log-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.alert-log-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.alert-log-sub { flex: 1; color: var(--text-3); font-size: 12px; }
+
+.alert-log-list {
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.alert-log-list li {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  gap: 2px 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.alert-log-list li:last-child { border-bottom: 0; }
+.alert-log-list li.unseen { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.alert-log-list .icon { grid-row: span 2; font-size: 13px; line-height: 18px; }
+.alert-log-list .buy .icon, .alert-log-list .buy b { color: var(--x); }
+.alert-log-list .sell .icon, .alert-log-list .sell b { color: var(--o); }
+.alert-log-list b { font-size: 13px; font-weight: 650; }
+.alert-log-list time { color: var(--text-3); font-family: var(--font-mono); font-size: 11.5px; white-space: nowrap; }
+.alert-log-list .detail { grid-column: 2 / 4; color: var(--text-2); font-family: var(--font-mono); font-size: 12px; }
+
+.alert-log-empty { margin: 0; padding: 20px 16px; color: var(--text-3); font-size: 12.5px; }
+
 [hidden] { display: none !important; }
 
-@media (max-width: 1600px) {
+@media (max-width: 1700px) {
   .brand { display: none; } /* the index toggle names what is on screen */
+  .stats .chg .abs { display: none; } /* keep just the % change */
 }
 
 @media (max-width: 1440px) {
@@ -576,6 +656,10 @@ button, input, select { font: inherit; color: inherit; }
   .stats .chg { display: none; }
   .topbar { column-gap: 12px; }
   .segmented button { padding: 0 9px; }
+  .controls { gap: 6px; }
+  .expiry-field span { display: none; } /* "13 Oct · weekly" speaks for itself */
+  .login input { width: 82px; }
+  .login .btn { padding: 0 10px; }
 }
 
 @media (max-width: 1100px) {

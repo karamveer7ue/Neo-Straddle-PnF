@@ -61,6 +61,18 @@ class ConfigBody(BaseModel):
     expiry: Literal["week1", "week2", "month1", "month2"] = DEFAULT_EXPIRY_ROLE
 
 
+class AlertBody(BaseModel):
+    key: str = Field(min_length=1, max_length=200)  # identifies the signal, for de-duplication
+    type: Literal["buy", "sell"]
+    underlying: Literal["NIFTY", "SENSEX"]
+    offset: int
+    strike: int
+    expiry: str | None = Field(default=None, max_length=10)
+    level: float  # the broken top (buy) or bottom (sell)
+    price: float  # the breakout box
+    barTs: int  # the 1-minute bar that confirmed the signal
+
+
 @app.get("/")
 async def index():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
@@ -86,6 +98,11 @@ async def configure(body: ConfigBody):
     atm = body.atm if "atm" in body.model_fields_set else KEEP
     app.state.engine.configure(body.underlying, body.days, body.expiry, atm=atm)
     return body.model_dump()
+
+
+@app.post("/api/alerts")
+async def log_alert(body: AlertBody):
+    return {"logged": app.state.engine.log_alert(body.model_dump())}
 
 
 @app.websocket("/ws")

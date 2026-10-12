@@ -59,7 +59,13 @@ RECONCILE_EVERY_MIN = 5  # refresh today's official candles this often
 FEED_RECONNECT_DELAY = 5
 REBUILD_RETRY_DELAY = 60  # after a failed automatic rebuild
 CONFIG_FILE = Path(__file__).resolve().parent.parent / ".pnf-config.json"
+ALERTS_FILE = Path(__file__).resolve().parent.parent / ".pnf-alerts.json"
+ALERTS_KEPT = 30  # most recent signal alerts kept in the log
 CLIENT_QUEUE_LIMIT = 5000  # pending messages per browser before a resync
+# The history API serves the minute still in progress as a partial candle.
+# A candle is used only once its minute ended this long ago; the newest
+# minutes come from live-built bars until a later refresh has final ones.
+CANDLE_SETTLE_SECONDS = 60
 KEEP = object()  # configure(): leave the underlying's ATM override as it is
 
 
@@ -97,6 +103,18 @@ class Chart:
         }
 
 
+def settled(candles: list[Candle], now: datetime) -> list[Candle]:
+    """Drop candles whose minute has not been over for CANDLE_SETTLE_SECONDS.
+
+    The history API includes the minute in progress (and the one just ended
+    may still be filling in). Treating such a candle as final froze the
+    chart: the browser ignores live prices for a minute it already has a
+    bar for, and the server never closes that minute's real bar.
+    """
+    cutoff = now.timestamp() - 60 - CANDLE_SETTLE_SECONDS
+    return [c for c in candles if c[0] <= cutoff]
+
+
 class Engine:
     def __init__(self, gateway: NeoGateway):
         self.gw = gateway
@@ -128,6 +146,9 @@ class Engine:
         # Live state
         self.spot: float | None = None
         self.spot_prev_close: float | None = None
+        self.future: dict | None = None  # near-month index future leg, plus "expiry"
+        self.future_ltp: float | None = None
+        self.future_prev_close: float | None = None
         self.ltp: dict[str, float] = {}
         # Column VWAPs need each minute's traded volume. The feed reports a leg's
         # running day volume; a minute's volume is the rise since the last close.
@@ -136,6 +157,8 @@ class Engine:
         self.feed_state = "offline"  # offline | connecting | live | reconnecting
         self.feed_message = ""
         self._tick_dirty = False
+
+        self.alerts: list[dict] = self._load_alerts()  # newest first
 
         self._past_cache: dict[tuple[str, date, date], list[Candle]] = {}
         self._build_task: asyncio.Task | None = None
@@ -208,6 +231,34 @@ class Engine:
         except OSError as exc:
             log.warning("Could not save %s: %s", CONFIG_FILE, exc)
 
+    # ---------------- Alert log ----------------
+
+    def log_alert(self, alert: dict) -> bool:
+        """Record a signal alert raised in a browser; returns False for a duplicate.
+
+        Every open page raises the same alert, so entries are deduplicated by
+        their key. Newest first, capped at ALERTS_KEPT, saved to disk.
+        """
+        if any(a["key"] == alert["key"] for a in self.alerts):
+            return False
+        entry = {**alert, "loggedAt": int(now_ist().timestamp())}
+        self.alerts = [entry, *self.alerts][:ALERTS_KEPT]
+        try:
+            ALERTS_FILE.write_text(json.dumps(self.alerts))
+        except OSError as exc:
+            log.warning("Could not save %s: %s", ALERTS_FILE, exc)
+        self._push({"type": "alerts", "alerts": self.alerts})
+        return True
+
+    def _load_alerts(self) -> list[dict]:
+        try:
+            alerts = json.loads(ALERTS_FILE.read_text())
+            if isinstance(alerts, list) and all(isinstance(a, dict) and "key" in a for a in alerts):
+                return alerts[:ALERTS_KEPT]
+        except (OSError, ValueError):
+            pass  # no log yet, or unreadable: start empty
+        return []
+
     def rebuild(self) -> None:
         if self._build_task and not self._build_task.done():
             self._build_task.cancel()
@@ -273,9 +324,21 @@ class Engine:
             },
             "spot": self.spot,
             "spotPrevClose": self.spot_prev_close,
+            "future": self._future_json(),
             "charts": [c.to_json() for c in self.charts],
             "legs": {k: self.ltp.get(k) for c in self.charts for k in c.leg_keys},
             "live": self._live_json(),
+            "alerts": self.alerts,
+        }
+
+    def _future_json(self) -> dict | None:
+        if not self.future:
+            return None
+        return {
+            "symbol": self.future["symbol"],
+            "expiry": self.future["expiry"],
+            "ltp": self.future_ltp,
+            "prevClose": self.future_prev_close,
         }
 
     def _set_phase(self, phase: str, message: str = "") -> None:
@@ -302,6 +365,13 @@ class Engine:
             quote = await self.gw.index_quote(u)
             atm_auto = round_to_strike(quote["open"], u.strike_step)
             atm = self.atm_overrides[u.key] or atm_auto
+
+            future, future_quote = None, None
+            try:  # the future is shown for reference only: never fail the charts over it
+                future = await self.gw.near_future(u, today)
+                future_quote = await self.gw.quote(future["segment"], future["token"], future["symbol"])
+            except NeoError as exc:
+                log.warning("Near-month %s future unavailable: %s", u.key, str(exc)[:200])
 
             self._set_phase("loading", f"Resolving {u.key} {expiry:%d %b} option contracts...")
             strikes = {key: atm + off for key, off in u.chart_offsets.items()}
@@ -336,6 +406,15 @@ class Engine:
             self.index_open = quote["open"]
             if switched or self.feed_state != "live" or self.spot is None:
                 self.spot, self.spot_prev_close = quote["ltp"], quote["prev_close"]
+            old_future_key = self.future["key"] if self.future else None
+            self.future = future
+            if future_quote and (
+                future["key"] != old_future_key or self.feed_state != "live" or self.future_ltp is None
+            ):
+                self.future_ltp, self.future_prev_close = future_quote["ltp"], future_quote["prev_close"]
+            elif not future:
+                self.future_ltp = self.future_prev_close = None
+            future_changed = (future["key"] if future else None) != old_future_key
             self.leg_bars = leg_bars
             self.window_dates = window
             self.charts = charts
@@ -347,8 +426,8 @@ class Engine:
             self.phase, self.message = "ready", ""
             self._push(self.snapshot())
 
-            if self.gw.logged_in and (switched or set(leg_keys) != old_leg_keys):
-                self._start_feed()  # resubscribe to the new legs (and index)
+            if self.gw.logged_in and (switched or future_changed or set(leg_keys) != old_leg_keys):
+                self._start_feed()  # resubscribe to the new legs, future and index
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # surfaced to the UI
@@ -369,7 +448,7 @@ class Engine:
         past = self._past_cache.get(key)
         if past is None:
             try:
-                bars = parse_candles(await self.gw.history(leg_key, from_date, today))
+                bars = settled(parse_candles(await self.gw.history(leg_key, from_date, today)), now_ist())
                 today_ok = True
             except NeoError:
                 if not today_started:
@@ -388,7 +467,7 @@ class Engine:
 
     async def _today_history(self, leg_key: str, today: date) -> tuple[list[Candle], bool]:
         try:
-            return parse_candles(await self.gw.history(leg_key, today, today)), True
+            return settled(parse_candles(await self.gw.history(leg_key, today, today)), now_ist()), True
         except NeoError as exc:
             log.warning("Today's history unavailable for %s: %s", leg_key, str(exc)[:200])
             return [], False
@@ -454,7 +533,8 @@ class Engine:
     async def _run_feed(self) -> None:
         while self.gw.logged_in:
             u = self.built_u
-            tokens = [WsToken(leg["segment"], leg["token"]) for c in self.charts for leg in c.legs]
+            legs = [leg for c in self.charts for leg in c.legs] + ([self.future] if self.future else [])
+            tokens = [WsToken(leg["segment"], leg["token"]) for leg in legs]
             self._set_feed("connecting", "Connecting to the live feed...")
             try:
                 async with self.gw.create_feed() as ws:
@@ -482,6 +562,8 @@ class Engine:
             leg_key = f"{message.exchange_segment}|{message.instrument_token}"
             if message.last_traded_price > 0:
                 self.ltp[leg_key] = message.last_traded_price
+                if self.future and leg_key == self.future["key"]:
+                    self.future_ltp = message.last_traded_price
                 self._tick_dirty = True
             if isinstance(message, SFeedScrip):
                 self.day_volume[leg_key] = message.volume_traded_today
@@ -561,6 +643,7 @@ class Engine:
                             "generation": self.generation,
                             "spot": self.spot,
                             "spotPrevClose": self.spot_prev_close,
+                            "future": self._future_json(),
                             "live": self._live_json(),
                         }
                     )

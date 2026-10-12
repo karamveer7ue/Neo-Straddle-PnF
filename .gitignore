@@ -5,6 +5,7 @@
 
 # Local state written by the app
 .pnf-config.json
+.pnf-alerts.json
 logs/
 *.log
 *.csv

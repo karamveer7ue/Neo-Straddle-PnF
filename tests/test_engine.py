@@ -38,8 +38,9 @@ def leg(segment: str, strike: int, kind: str) -> dict:
 
 
 class FakeGateway:
-    def __init__(self, today_minutes=45, today_fails=False):
+    def __init__(self, today_minutes=45, today_fails=False, future_fails=False):
         self.logged_in = False
+        self.future_fails = future_fails
         self.today_minutes = today_minutes
         self.today_fails = today_fails
         self.history_calls = []
@@ -52,6 +53,21 @@ class FakeGateway:
 
     async def index_quote(self, u):
         return QUOTES[u.key]
+
+    async def near_future(self, u, today):
+        if self.future_fails:
+            raise NeoError("futures search failed")
+        token = f"{u.key}FUT"
+        return {
+            "key": f"{u.fo_segment}|{token}",
+            "segment": u.fo_segment,
+            "token": token,
+            "symbol": f"{u.key}26OCTFUT",
+            "expiry": "2026-10-27",
+        }
+
+    async def quote(self, segment, token, what):
+        return {"ltp": 22612.6, "open": 22600.0, "prev_close": 22535.2}
 
     async def option_contracts(self, u, expiry, strikes):
         return {(s, k): leg(u.fo_segment, s, k) for s in strikes for k in ("CE", "PE")}
@@ -106,6 +122,7 @@ def clock(monkeypatch):
 @pytest.fixture
 def make_engine(monkeypatch, tmp_path):
     monkeypatch.setattr(engine_mod, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(engine_mod, "ALERTS_FILE", tmp_path / "alerts.json")
 
     def make(**gateway_kwargs):
         return Engine(FakeGateway(**gateway_kwargs))
@@ -170,7 +187,9 @@ def test_build_picks_atm_from_open_and_nearest_expiry(clock, make_engine):
     assert [c.strike for c in eng.charts] == [22100, 22300, 22500]
     assert eng.window_dates == [date(2026, 10, 8), date(2026, 10, 9), TODAY]
     series = eng.charts[1].series()
-    assert len(series) == 375 * 2 + 45
+    # Today the fake serves 09:15-09:59; at 10:00:30 only candles whose minute ended
+    # at least a minute ago count, so 09:59 (still settling) is left out.
+    assert len(series) == 375 * 2 + 44
     # (ts, straddle close, CE+PE volume); each leg trades 100 a minute.
     assert series[0] == (ist_ts(9, 15, date(2026, 10, 8)), 150.0, 200)
     assert series[1] == (ist_ts(9, 16, date(2026, 10, 8)), 150.1, 200)
@@ -239,7 +258,8 @@ def test_live_feed_subscribes_to_the_built_exchange(clock, make_engine):
     asyncio.run(scenario(eng))
     kinds = dict(eng.gw.subscriptions)
     assert kinds["index"] == [("bse_cm", "SENSEX")]
-    assert ("bse_fo", "72300CE") in kinds["scrips"] and len(kinds["scrips"]) == 6
+    assert ("bse_fo", "72300CE") in kinds["scrips"] and len(kinds["scrips"]) == 7  # 6 legs + future
+    assert ("bse_fo", "SENSEXFUT") in kinds["scrips"]
 
     # Ticks are keyed by segment, so a BSE token never feeds an NSE leg.
     eng._on_feed(tick("72300CE", 410.0, segment="bse_fo"))
@@ -295,12 +315,33 @@ def test_live_minute_bars_and_reconcile(clock, make_engine):
     eng._close_minute(datetime(2026, 10, 12, 10, 1, tzinfo=IST))
     assert atm.series()[-1] == (ist_ts(10, 1), 190.75, 400)
 
-    # Official candles for today arrive and cover the live bar's minute.
+    # Official candles for today arrive. Only settled minutes (up to 09:58 at
+    # 10:00:30) replace live data; the newer live bars stay.
     eng.gw.today_fails = False
-    eng.gw.today_minutes = 50  # 09:15 .. 10:04
+    eng.gw.today_minutes = 50  # the API would serve 09:15 .. 10:04
     asyncio.run(eng._reconcile())
-    assert atm.live == []
-    assert atm.series()[-1] == (ist_ts(10, 4), 154.9, 200)  # official candle and volume
+    assert [b[0] for b in atm.live] == [ist_ts(10, 0), ist_ts(10, 1)]
+    assert atm.series()[-3] == (ist_ts(9, 58), 154.3, 200)  # official candle and volume
+    assert atm.series()[-1] == (ist_ts(10, 1), 190.75, 400)
+
+
+def test_refresh_serving_the_minute_in_progress_does_not_freeze_the_chart(clock, make_engine):
+    """Regression (2026-10-12): the history API includes the minute still in
+    progress. Stored as final, it blocked that minute's live bar, and the
+    chart stopped while live prices kept updating."""
+    clock["t"] = datetime(2026, 10, 12, 9, 32, 0, 300000, tzinfo=IST)  # refresh runs at 09:32:00
+    eng = make_engine(today_minutes=18)  # the API serves 09:15 .. 09:32 (09:32 just started)
+    asyncio.run(eng._build())
+    atm = eng.charts[1]
+    eng.feed_state = "live"
+    eng._on_feed(tick("22300CE", 120.0, volume=1000))
+    eng._on_feed(tick("22300PE", 60.0, volume=1000))
+    asyncio.run(eng._reconcile())
+    assert atm.series()[-1][0] < ist_ts(9, 31)  # neither 09:31 nor the forming 09:32
+    # The live 09:32 bar closes normally at 09:33.
+    clock["t"] = datetime(2026, 10, 12, 9, 33, 0, 200000, tzinfo=IST)
+    eng._close_minute(datetime(2026, 10, 12, 9, 32, tzinfo=IST))
+    assert atm.series()[-1][:2] == (ist_ts(9, 32), 180.0)
 
 
 def test_minute_close_needs_live_feed_and_session(clock, make_engine):
@@ -328,3 +369,50 @@ def test_past_days_are_cached_between_builds(clock, make_engine):
     # Only today's candles are re-fetched for the same strikes.
     assert len(second) == 6
     assert all(f == t == TODAY for _, f, t in second)
+
+
+def alert(n: int) -> dict:
+    return {
+        "key": f"k{n}",
+        "type": "buy",
+        "underlying": "NIFTY",
+        "offset": 0,
+        "strike": 22500,
+        "expiry": "2026-10-13",
+        "level": 200.0,
+        "price": 201.0,
+        "barTs": 1_791_777_000 + n * 60,
+    }
+
+
+def test_alert_log_dedupes_keeps_newest_30_and_survives_restart(clock, make_engine):
+    eng = make_engine()
+    assert eng.log_alert(alert(1)) is True
+    assert eng.log_alert(alert(1)) is False  # a second tab reporting the same signal
+    for n in range(2, 40):
+        eng.log_alert(alert(n))
+    assert len(eng.alerts) == 30
+    assert [a["key"] for a in eng.alerts[:2]] == ["k39", "k38"]  # newest first
+    assert eng.alerts[-1]["key"] == "k10"  # older ones dropped
+    assert eng.alerts[0]["loggedAt"] == int(clock["t"].timestamp())
+    assert eng.snapshot()["alerts"] == eng.alerts
+
+    restored = make_engine()
+    assert restored.alerts == eng.alerts
+
+
+def test_near_month_future_is_quoted_and_follows_live_ticks(clock, make_engine):
+    eng = make_engine()
+    asyncio.run(eng._build())
+    fut = eng.snapshot()["future"]
+    assert fut == {"symbol": "NIFTY26OCTFUT", "expiry": "2026-10-27", "ltp": 22612.6, "prevClose": 22535.2}
+    eng.feed_state = "live"
+    eng._on_feed(tick("NIFTYFUT", 22650.0))
+    assert eng.snapshot()["future"]["ltp"] == 22650.0
+
+
+def test_charts_still_build_when_the_future_is_unavailable(clock, make_engine):
+    eng = make_engine(future_fails=True)
+    asyncio.run(eng._build())
+    assert eng.phase == "ready"
+    assert eng.snapshot()["future"] is None

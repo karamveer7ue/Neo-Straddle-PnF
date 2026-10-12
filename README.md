@@ -24,6 +24,7 @@ History comes from the Neo historical API, live prices stream over the Neo WebSo
 ## Features
 
 - **NIFTY or SENSEX:** switch with one click; NIFTY options come from NSE, SENSEX options from BSE.
+- **Spot and future:** the index price and the near-month future price, each with its change since the previous close, live in the top bar.
 - **Three straddles at once:** ATM and two side strikes (± 200 for NIFTY, ± 500 for SENSEX), laid out horizontally.
 - **Point & Figure on 1-minute closes:** box size fixed at 0.5% of the first straddle close in the window, 3-box reversal.
 - **ATM from today's open or your own strike:** the default ATM is the index's open rounded to the nearest strike; type any strike to override it.
@@ -167,6 +168,7 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | Control | What it does |
 | --- | --- |
 | **NIFTY / SENSEX** | Switches all three charts to the other index. |
+| **Spot / Fut** | The index price and the near-month future (e.g. NIFTY26OCTFUT; hover for the contract and expiry), with their change since the previous close. The future rolls to the next month after expiry. |
 | **Expiry** | Switches all three charts to another contract. |
 | **ATM** | Type a strike (a multiple of 50 for NIFTY, 100 for SENSEX) and press Enter or **Apply**. Esc discards the edit. |
 | **Auto** | Goes back to the ATM from today's index open. Hover it to see the open and the strike it gives. |
@@ -174,6 +176,7 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | **VWAP / SMA 10** | Show or hide each overlay on all three charts; both, either or none (remembered by the browser). |
 | **- / Fit / +** | Smaller boxes, fit the boxes to the panel height, bigger boxes. |
 | **Bell** | Turns alert sounds on or off (remembered by the browser). |
+| **Alert log** | Opens the last 30 alerts; the badge counts new ones. |
 | **Status pill** | **History only**, **Connecting**, **Reconnecting** or **Live**. |
 
 Inside each panel:
@@ -196,6 +199,11 @@ Each alert gives you:
 - a chime: rising notes for a buy, falling notes for a sell,
 - a system notification when the tab is in the background, if you have allowed notifications (the browser asks when you go live).
 
+**Alert log:** the list button next to the bell opens the last 30 alerts, newest first, with the index, chart, strike, expiry, the level broken, the breakout price and the bar time.
+A red badge on the button counts alerts you have not seen yet; opening the log clears it.
+The log is kept by the server in `.pnf-alerts.json` (gitignored), so it survives page reloads and server restarts, and an alert seen by several open tabs is logged once.
+Alerts are detected in the browser, so they are only logged while at least one page is open.
+
 Browsers block sound until you have interacted with the page, so click anywhere once (entering the TOTP counts).
 Until then a toast tells you that sound is waiting for a click.
 
@@ -207,7 +215,7 @@ Until then a toast tells you that sound is waiting for a click.
 - **Refreshing:** every 5 minutes during the session (and once at 15:36), today's official candles are fetched again and replace the live-built bars they cover.
 - **Daily rollover:** at 09:16 on each trading day the charts rebuild with the new day's ATM, expiry and history window.
 - **Holidays:** a weekday whose candles load fine but come back empty after 09:30 is treated as a market holiday and left out of the window.
-- **Saved settings:** the index on screen, each index's ATM override, the day count and the expiry choice are stored in `.pnf-config.json` (gitignored).
+- **Saved settings:** the index on screen, each index's ATM override, the day count and the expiry choice are stored in `.pnf-config.json` (gitignored); the alert log in `.pnf-alerts.json`.
 
 ## Development
 

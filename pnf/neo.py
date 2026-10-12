@@ -8,7 +8,7 @@ failures (429, 5xx) are retried with backoff; anything else raises.
 import asyncio
 import logging
 import time
-from datetime import date
+from datetime import date, datetime
 
 from neo_api_client import NeoAPI
 
@@ -123,20 +123,53 @@ class NeoGateway:
 
     async def index_quote(self, u: Underlying) -> dict:
         """Latest index quote: {'ltp', 'open', 'prev_close'} (latest session)."""
+        return await self.quote(u.index_segment, u.index_token, f"the {u.key} index")
+
+    async def quote(self, segment: str, token: str, what: str) -> dict:
+        """Latest quote for one instrument: {'ltp', 'open', 'prev_close'}."""
         response = await self._call_with_retry(
             self.client.quotes,
-            instrument_tokens=[{"instrument_token": u.index_token, "exchange_segment": u.index_segment}],
+            instrument_tokens=[{"instrument_token": token, "exchange_segment": segment}],
             quote_type="all",
         )
         if not isinstance(response, list) or not response:
-            raise NeoError(f"Could not load the {u.key} quote: {response}")
+            raise NeoError(f"Could not load the quote for {what}: {response}")
         row = response[0]
         ohlc = row.get("ohlc", {})
         ltp = float(row["ltp"])
         return {
             "ltp": ltp,
             "open": float(ohlc.get("open") or ltp),
-            "prev_close": ltp - float(row.get("change") or 0),
+            "prev_close": round(ltp - float(row.get("change") or 0), 2),  # no float leftovers
+        }
+
+    async def near_future(self, u: Underlying, today: date) -> dict:
+        """The near-month index future: the first contract expiring on or after today.
+
+        Returns a leg like option_contracts() does, plus its expiry date.
+        """
+        response = await self._call_with_retry(
+            self.client.search_scrip, exchange_segment=u.fo_segment, symbol=u.key.lower(), option_type="FUT"
+        )
+        if not isinstance(response, list):
+            raise NeoError(f"Futures search failed for {u.key}: {response}")
+        contracts = []
+        for row in response:
+            if str(row.get("pSymbolName", "")).strip().upper() != u.key:
+                continue
+            expiry = datetime.strptime(row["pExpiryDate"], "%d%b%Y").date()
+            if expiry >= today:
+                contracts.append((expiry, row))
+        if not contracts:
+            raise NeoError(f"No {u.key} future expiring on or after {today}")
+        expiry, row = min(contracts, key=lambda c: c[0])
+        token = str(row["pSymbol"])
+        return {
+            "key": f"{u.fo_segment}|{token}",
+            "segment": u.fo_segment,
+            "token": token,
+            "symbol": row["pTrdSymbol"],
+            "expiry": expiry.isoformat(),
         }
 
     async def option_contracts(

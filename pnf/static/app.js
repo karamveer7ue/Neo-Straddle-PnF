@@ -10,6 +10,9 @@ const els = {
   spotStat: $('spot-stat'),
   spot: $('spot'),
   spotChg: $('spot-chg'),
+  futStat: $('fut-stat'),
+  fut: $('fut'),
+  futChg: $('fut-chg'),
   expiry: $('expiry'),
   config: $('config'),
   atm: $('atm'),
@@ -21,6 +24,12 @@ const els = {
   zoomFit: $('zoom-fit'),
   sound: $('sound'),
   overlays: $('overlays'),
+  alertLogBtn: $('alert-log-btn'),
+  alertBadge: $('alert-badge'),
+  alertLog: $('alert-log'),
+  alertLogList: $('alert-log-list'),
+  alertLogEmpty: $('alert-log-empty'),
+  alertLogClose: $('alert-log-close'),
   pill: $('feed-pill'),
   login: $('login'),
   totp: $('totp'),
@@ -41,6 +50,7 @@ const state = {
   status: null,
   spot: null,
   spotPrevClose: null,
+  future: null, // {symbol, expiry, ltp, prevClose} of the near-month future
   legs: {},
   live: null,
   panels: new Map(), // key -> {root, panel, def}
@@ -49,6 +59,7 @@ const state = {
   loginError: '',
   atmDirty: false,
   alerted: new Set(), // signal keys already alerted, so a re-sent bar never alerts twice
+  alerts: [], // the server's alert log, newest first
 };
 
 const SIGNAL_NAMES = { buy: 'Double top buy', sell: 'Double bottom sell' };
@@ -75,14 +86,18 @@ const signed = (v, digits = 2) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(
 const offsetLabel = (off) => (off === 0 ? 'ATM' : `ATM ${off > 0 ? '+' : '−'} ${Math.abs(off)}`);
 const fmtStrike = (s) => s.toLocaleString('en-IN');
 
+/** Show "+12.30 (+1.25%)" (the absolute part in its own span, so CSS can hide it). */
 function setChange(el, value, base, suffix = '') {
   if (value == null || base == null || !base) {
-    el.textContent = '';
-    el.className = el.className.replace(/\b(up|down)\b/g, '').trim();
+    el.replaceChildren();
+    el.classList.remove('up', 'down');
     return;
   }
   const diff = value - base;
-  el.textContent = `${signed(diff)} (${signed((diff / base) * 100)}%)${suffix}`;
+  const abs = document.createElement('span');
+  abs.className = 'abs';
+  abs.textContent = `${signed(diff)} `;
+  el.replaceChildren(abs, `(${signed((diff / base) * 100)}%)${suffix}`);
   el.classList.toggle('up', diff >= 0);
   el.classList.toggle('down', diff < 0);
 }
@@ -186,6 +201,19 @@ function alertSignals(entry, signals) {
     if (state.alerted.has(key)) continue;
     state.alerted.add(key);
     const price = entry.panel.pnf.price(s.row);
+    const level = entry.panel.pnf.price(s.level);
+    // Record it in the shared log (the server ignores duplicates from other tabs).
+    post('/api/alerts', {
+      key: `${builtKey()}|${key}`,
+      type: s.type,
+      underlying: builtKey(),
+      offset: entry.def.offset,
+      strike: entry.def.strike,
+      expiry: state.config?.expiry ?? null,
+      level: Math.round(level * 100) / 100,
+      price: Math.round(price * 100) / 100,
+      barTs: s.ts,
+    }).catch(() => {}); // logging must never get in the way of the alert itself
     raiseAlert({
       type: s.type,
       title: `${SIGNAL_NAMES[s.type]} \u00b7 ${offsetLabel(entry.def.offset)}`,
@@ -230,6 +258,94 @@ function renderUnderlyings(cfg) {
   }
 }
 
+// ---------------- Alert log ----------------
+
+const SEEN_KEY = 'pnf.alertsSeen'; // loggedAt of the newest alert the viewer has seen
+
+function readSeen() {
+  try {
+    const v = Number(localStorage.getItem(SEEN_KEY));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSeen(v) {
+  try {
+    localStorage.setItem(SEEN_KEY, String(v));
+  } catch {
+    // storage unavailable: the badge just resets on reload
+  }
+}
+
+let seenAtOpen = 0; // alerts newer than this are highlighted while the log is open
+
+function setAlerts(alerts) {
+  state.alerts = alerts ?? [];
+  // First visit: count only alerts that arrive from now on, not the backlog.
+  if (readSeen() === null) writeSeen(state.alerts[0]?.loggedAt ?? Math.floor(Date.now() / 1000));
+  if (!els.alertLog.hidden) markAlertsSeen();
+  renderAlertLog();
+}
+
+function markAlertsSeen() {
+  if (state.alerts.length) writeSeen(Math.max(readSeen() ?? 0, state.alerts[0].loggedAt));
+}
+
+function renderAlertLog() {
+  const seen = readSeen() ?? 0;
+  const unseen = state.alerts.filter((a) => a.loggedAt > seen).length;
+  els.alertBadge.hidden = !unseen;
+  els.alertBadge.textContent = unseen > 9 ? '9+' : String(unseen);
+  els.alertLogBtn.title = unseen ? `Alert log (last 30) - ${unseen} new` : 'Alert log (last 30)';
+
+  els.alertLogEmpty.hidden = state.alerts.length > 0;
+  els.alertLogList.replaceChildren(...state.alerts.map((a) => {
+    const li = document.createElement('li');
+    li.className = `${a.type}${a.loggedAt > seenAtOpen ? ' unseen' : ''}`;
+    const icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.textContent = a.type === 'buy' ? '\u25b2' : '\u25bc';
+    const title = document.createElement('b');
+    title.textContent = `${SIGNAL_NAMES[a.type]} \u00b7 ${offsetLabel(a.offset)}`;
+    const time = document.createElement('time');
+    time.dateTime = new Date(a.barTs * 1000).toISOString();
+    time.textContent = `${fmtDay(a.barTs)} ${fmtTime(a.barTs)}`;
+    const detail = document.createElement('span');
+    detail.className = 'detail';
+    const expiry = a.expiry
+      ? ` (${new Date(`${a.expiry}T00:00:00+05:30`).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' })})`
+      : '';
+    detail.textContent = `${a.underlying} ${fmtStrike(a.strike)}${expiry} straddle broke ` +
+      `${a.type === 'buy' ? 'above' : 'below'} ${fmtPrice(a.level)} \u2192 ${fmtPrice(a.price)}`;
+    li.append(icon, title, time, detail);
+    return li;
+  }));
+}
+
+function toggleAlertLog(open = els.alertLog.hidden) {
+  if (open) {
+    seenAtOpen = readSeen() ?? 0;
+    markAlertsSeen();
+  }
+  els.alertLog.hidden = !open;
+  els.alertLogBtn.setAttribute('aria-expanded', String(open));
+  renderAlertLog();
+}
+
+els.alertLogBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleAlertLog();
+});
+els.alertLogClose.addEventListener('click', () => toggleAlertLog(false));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !els.alertLog.hidden) toggleAlertLog(false);
+});
+document.addEventListener('click', (e) => {
+  if (!els.alertLog.hidden && !els.alertLog.contains(e.target)) toggleAlertLog(false);
+});
+
 function renderPanels() {
   for (const entry of state.panels.values()) renderPanelHead(entry);
 }
@@ -239,6 +355,12 @@ function renderPanels() {
 function renderTopbar() {
   els.spot.textContent = state.spot != null ? fmtPrice(state.spot) : '–';
   setChange(els.spotChg, state.spot, state.spotPrevClose);
+  const fut = state.future;
+  els.fut.textContent = fut?.ltp != null ? fmtPrice(fut.ltp) : '–';
+  setChange(els.futChg, fut?.ltp, fut?.prevClose);
+  els.futStat.title = fut
+    ? `${fut.symbol}, near-month future expiring ${new Date(`${fut.expiry}T00:00:00+05:30`).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })}`
+    : 'Near-month future unavailable';
 
   const cfg = state.config;
   if (cfg) {
@@ -247,7 +369,7 @@ function renderTopbar() {
     renderExpiryOptions(cfg);
     els.brandTitle.textContent = `${u.key} straddle`;
     document.title = `${u.key} Straddle P&F`;
-    els.spotStat.title = `${u.key} index`;
+    els.spotStat.title = `${u.key} index (spot)`;
     els.atm.step = String(u.strikeStep);
     if (!state.atmDirty && document.activeElement !== els.atm && cfg.atm != null) els.atm.value = cfg.atm;
     els.days.value = String(cfg.days);
@@ -378,7 +500,9 @@ const handlers = {
     state.status = msg.status;
     state.spot = msg.spot;
     state.spotPrevClose = msg.spotPrevClose;
+    state.future = msg.future ?? null;
     state.legs = { ...msg.legs };
+    setAlerts(msg.alerts);
     buildPanels(msg.charts);
     for (const def of msg.charts) {
       const entry = state.panels.get(def.key);
@@ -395,6 +519,9 @@ const handlers = {
     }
     applyLive(msg.live);
     renderAll();
+  },
+  alerts(msg) {
+    setAlerts(msg.alerts);
   },
   status(msg) {
     state.status = msg;
@@ -414,6 +541,7 @@ const handlers = {
     if (msg.generation !== state.generation) return;
     state.spot = msg.spot;
     state.spotPrevClose = msg.spotPrevClose;
+    state.future = msg.future ?? null;
     applyLive(msg.live);
     renderTopbar();
     renderPanels();
