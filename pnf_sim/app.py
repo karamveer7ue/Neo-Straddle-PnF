@@ -17,11 +17,11 @@ from typing import Literal
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from pnf.neo import NeoError, NeoGateway
 from pnf.series import UNDERLYINGS
+from pnf.static_files import RevalidatingStaticFiles
 
 from .replay import (
     EXPIRIES_OFFERED,
@@ -59,8 +59,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Straddle simulator", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=LIVE_STATIC), name="static")
-app.mount("/sim", StaticFiles(directory=SIM_STATIC), name="sim")
+app.mount("/static", RevalidatingStaticFiles(directory=LIVE_STATIC), name="static")
+app.mount("/sim", RevalidatingStaticFiles(directory=SIM_STATIC), name="sim")
 
 
 class SimulateBody(BaseModel):

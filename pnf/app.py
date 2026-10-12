@@ -10,12 +10,12 @@ from typing import Literal
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .engine import KEEP, Engine
 from .neo import NeoError, NeoGateway
 from .series import DEFAULT_EXPIRY_ROLE, DEFAULT_UNDERLYING, MAX_DAYS, MIN_DAYS, UNDERLYINGS
+from .static_files import RevalidatingStaticFiles
 
 STATIC = Path(__file__).parent / "static"
 
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="NIFTY straddle P&F", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.mount("/static", RevalidatingStaticFiles(directory=STATIC), name="static")
 
 
 class LoginBody(BaseModel):

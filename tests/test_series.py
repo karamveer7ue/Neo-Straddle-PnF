@@ -129,3 +129,28 @@ def test_describe_extracts_sdk_error_messages():
     assert describe(fault) == "Invalid neosymbol"
     assert describe({"Error Message": "Complete the 2fa process"}) == "Complete the 2fa process"
     assert describe({"stat": "Ok"}) == ""
+
+
+def test_static_files_must_be_revalidated_by_browsers():
+    """Regression (2026-10-12): without Cache-Control a browser reused an old
+    cached pnf.js next to a new simulator.js and the page script failed."""
+    import asyncio
+
+    import httpx
+
+    from pnf.app import app as live_app
+    from pnf_sim.app import app as sim_app
+
+    async def check(app, path):
+        # Straight to the ASGI app; no lifespan, since static files need no gateway.
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
+            first = await client.get(path)
+            assert first.status_code == 200
+            assert first.headers["cache-control"] == "no-cache"
+            again = await client.get(path, headers={"if-none-match": first.headers["etag"]})
+            assert again.status_code == 304  # revalidation stays cheap
+            assert again.headers["cache-control"] == "no-cache"
+
+    cases = [(live_app, "/static/pnf.js"), (sim_app, "/static/pnf.js"), (sim_app, "/sim/simulator.js")]
+    for app, path in cases:
+        asyncio.run(check(app, path))
