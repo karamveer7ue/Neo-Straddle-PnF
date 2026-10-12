@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildPnf } from '../pnf/static/pnf.js';
+import { buildPnf, columnSma, intradayVwap } from '../pnf/static/pnf.js';
 
 // p0 = 200 with 0.5% boxes gives a box of exactly 1.00, so rows read as rupees.
 const bars = (...closes) => closes.map((c, i) => [i, c]);
@@ -104,4 +104,79 @@ test('columns record the last bar processed while they were current', () => {
   // 201.5 and 204 do not change the chart but still belong to the O column's time span.
   const chart = buildPnf([[1, 200], [2, 205], [3, 202], [4, 201.5], [5, 204], [6, 206]]);
   assert.deepEqual(chart.columns.map((c) => c.endTs), [2, 5, 6]);
+});
+
+// ---------------- Moving average ----------------
+
+test('column SMA averages the midpoints of the last N columns', () => {
+  const cols = [
+    { hi: 5, lo: 1 }, // mid 3
+    { hi: 4, lo: 2 }, // mid 3
+    { hi: 9, lo: 3 }, // mid 6
+    { hi: 8, lo: 0 }, // mid 4
+  ];
+  assert.deepEqual(columnSma(cols, 3), [null, null, 4, 13 / 3]);
+});
+
+test('chart SMA is in price terms, one value per column', () => {
+  // p0 = 200, box = 1: rows read as rupees above 200.
+  const chart = buildPnf(bars(200, 205, 202, 206, 203), { smaPeriod: 2 });
+  assert.deepEqual(shape(chart), ['X1,2,3,4,5', 'O4,3,2', 'X3,4,5,6', 'O5,4,3']);
+  // midpoints 3, 3, 4.5, 4 -> SMA(2): -, 3, 3.75, 4.25 rows above 200
+  assert.deepEqual(chart.sma, [null, 203, 203.75, 204.25]);
+  assert.equal(buildPnf(bars(200, 205)).smaPeriod, 10);
+});
+
+// ---------------- Axis tags ----------------
+
+test('axis tags keep their place when free and yield to higher-priority tags', async () => {
+  const { placeTags } = await import('../pnf/static/axis.js');
+  const ys = (tags) => placeTags(tags, 9, 500).map((t) => t.y);
+  assert.deepEqual(ys([{ y: 100 }, { y: 300 }]), [100, 300]); // far apart: untouched
+  assert.deepEqual(ys([{ y: 100 }, { y: 105 }]), [100, 118]); // nudged to the nearest free side
+  assert.deepEqual(ys([{ y: 100 }, { y: 95 }]), [100, 82]);
+  // A third tag squeezed between takes the nearest free slot, right against a placed tag.
+  assert.deepEqual(ys([{ y: 100 }, { y: 110 }, { y: 104 }]), [100, 118, 82]);
+  // Clamped to the axis: a tag below the bottom edge moves up, never off-screen.
+  assert.deepEqual(ys([{ y: 600 }, { y: 600 }]), [500, 482]);
+});
+
+// ---------------- Intraday VWAP ----------------
+
+const IST_0915 = Date.UTC(2026, 9, 9, 3, 45) / 1000; // 09:15 IST on 9 Oct 2026, epoch seconds
+const at = (min) => IST_0915 + min * 60; // minutes after 09:15
+
+test('intraday VWAP accumulates volume-weighted closes from the session open', () => {
+  const bars = [
+    [at(0), 100, 10],
+    [at(1), 110, 30],
+    [at(2), 120, 10],
+  ];
+  assert.deepEqual(intradayVwap(bars), [100, (100 * 10 + 110 * 30) / 40, (100 * 10 + 110 * 30 + 120 * 10) / 50]);
+});
+
+test('intraday VWAP restarts at each session open', () => {
+  const nextDay = at(24 * 60); // 09:15 the next day
+  assert.deepEqual(intradayVwap([[at(374), 500, 1000], [nextDay, 100, 10], [nextDay + 60, 110, 10]]), [500, 100, 105]);
+});
+
+test('intraday VWAP is null until the session trades volume', () => {
+  assert.deepEqual(intradayVwap([[at(0), 100, 0], [at(1), 110], [at(2), 120, 5]]), [null, null, 120]);
+});
+
+test('each column carries the intraday VWAP from when it last updated', () => {
+  // Columns: X opened at 09:16 (bars 1..2), O opened at 09:18 (bars 3..4).
+  const chart = buildPnf([
+    [at(0), 200, 10],
+    [at(1), 203, 10],
+    [at(2), 205, 20],
+    [at(3), 202, 20],
+    [at(4), 201.5, 40],
+  ]);
+  assert.deepEqual(shape(chart), ['X1,2,3,4,5', 'O4,3,2']);
+  const upTo = (n) => {
+    const b = [[200, 10], [203, 10], [205, 20], [202, 20], [201.5, 40]].slice(0, n);
+    return b.reduce((s, [p, v]) => s + p * v, 0) / b.reduce((s, [, v]) => s + v, 0);
+  };
+  assert.deepEqual(chart.vwap, [upTo(3), upTo(5)]);
 });

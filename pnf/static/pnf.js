@@ -9,15 +9,17 @@
 const EPS = 1e-9;
 
 /**
- * @param {Array<[number, number]>} bars  [timestamp, close] pairs, oldest first
+ * @param {Array<[number, number, number?]>} bars  [timestamp, close, volume?], oldest first
  * @param {{boxPct?: number, reversal?: number}} [opts]
  * @returns {null | {
- *   p0: number, box: number, reversal: number,
- *   columns: Array<{dir: 'X'|'O', boxes: Array<{row: number, ts: number}>, hi: number, lo: number, endTs: number}>,
+ *   p0: number, box: number, reversal: number, smaPeriod: number, sma: Array<number|null>,
+ *   columns: Array<{dir: 'X'|'O', boxes: Array<{row: number, ts: number}>, hi: number, lo: number,
+ *     startTs: number, endTs: number}>,
+ *   vwap: Array<number|null>,
  *   hi: number, lo: number, price: (row: number) => number, rowOf: (price: number) => number,
  * }}
  */
-export function buildPnf(bars, { boxPct = 0.5, reversal = 3 } = {}) {
+export function buildPnf(bars, { boxPct = 0.5, reversal = 3, smaPeriod = 10 } = {}) {
   if (!bars.length) return null;
   const p0 = bars[0][1];
   const box = (p0 * boxPct) / 100;
@@ -32,8 +34,8 @@ export function buildPnf(bars, { boxPct = 0.5, reversal = 3 } = {}) {
   let col = null;
 
   const open = (dir, from, to, ts) => {
-    // endTs: the last bar processed while this was the current column.
-    col = { dir, boxes: [], hi: Math.max(from, to), lo: Math.min(from, to), endTs: ts };
+    // startTs / endTs: the first and last bars processed while this was the current column.
+    col = { dir, boxes: [], hi: Math.max(from, to), lo: Math.min(from, to), startTs: ts, endTs: ts };
     const step = dir === 'X' ? 1 : -1;
     for (let r = from; dir === 'X' ? r <= to : r >= to; r += step) col.boxes.push({ row: r, ts });
     columns.push(col);
@@ -75,9 +77,68 @@ export function buildPnf(bars, { boxPct = 0.5, reversal = 3 } = {}) {
     hi = Math.max(hi, c.hi);
     lo = Math.min(lo, c.lo);
   }
+  const price = (row) => p0 + row * box;
   return {
-    p0, box, reversal, columns, hi, lo, signals: findSignals(columns), price: (row) => p0 + row * box, rowOf,
+    p0, box, reversal, columns, hi, lo, price, rowOf,
+    signals: findSignals(columns),
+    smaPeriod,
+    sma: columnSma(columns, smaPeriod).map((row) => (row === null ? null : price(row))),
+    // Intraday VWAP as it stood when each column last updated.
+    vwap: sampleAt(columns, bars, intradayVwap(bars)),
   };
+}
+
+const IST_OFFSET_S = 5.5 * 3600;
+/** IST calendar day number of an epoch-seconds timestamp (identifies the session). */
+export const istDay = (ts) => Math.floor((ts + IST_OFFSET_S) / 86400);
+
+/**
+ * Intraday VWAP - the standard straddle VWAP: each 1-minute close (CE + PE)
+ * weighted by that minute's volume (CE + PE), accumulated from the session
+ * open and restarted every session. This is the average price the straddle
+ * actually traded at today. Null until the session has traded volume.
+ * @param bars [timestamp, close, volume] in time order
+ * @returns {Array<number|null>} one value per bar
+ */
+export function intradayVwap(bars) {
+  const out = [];
+  let day = null;
+  let pv = 0;
+  let volume = 0;
+  for (const [ts, close, v = 0] of bars) {
+    if (istDay(ts) !== day) {
+      day = istDay(ts);
+      pv = 0;
+      volume = 0;
+    }
+    pv += close * v;
+    volume += v;
+    out.push(volume > 0 ? pv / volume : null);
+  }
+  return out;
+}
+
+/** Per column, the value of `perBar` at the column's last bar (`endTs`). */
+function sampleAt(columns, bars, perBar) {
+  const byTs = new Map(bars.map((b, i) => [b[0], perBar[i]]));
+  return columns.map((col) => byTs.get(col.endTs) ?? null);
+}
+
+/**
+ * Simple moving average of column midpoints - the usual P&F moving average.
+ * Element i averages the midpoints ((hi + lo) / 2, in rows) of columns
+ * i - period + 1 .. i; it is null until `period` columns exist.
+ * @returns {Array<number|null>} one value per column, in rows
+ */
+export function columnSma(columns, period) {
+  const out = [];
+  let sum = 0;
+  columns.forEach((col, i) => {
+    sum += (col.hi + col.lo) / 2;
+    if (i >= period) sum -= (columns[i - period].hi + columns[i - period].lo) / 2;
+    out.push(i >= period - 1 ? sum / period : null);
+  });
+  return out;
 }
 
 /**

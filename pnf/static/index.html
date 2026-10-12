@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NIFTY Straddle P&amp;F</title>
+  <title>Straddle P&amp;F</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
   <script type="module" src="/static/app.js"></script>
@@ -11,13 +11,14 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <h1>NIFTY straddle</h1>
-      <p>Point &amp; Figure &middot; 1-min close &middot; 0.5% box &middot; 3-box reversal &middot; VWAP</p>
+      <h1 id="brand-title">Straddle P&amp;F</h1>
+      <p>Point &amp; Figure &middot; 1-min close &middot; 0.5% box &middot; 3-box reversal &middot; VWAP &middot; SMA 10</p>
     </div>
 
+    <div class="segmented" id="underlyings" role="group" aria-label="Index"></div>
+
     <div class="stats">
-      <div class="stat">
-        <span class="label">NIFTY</span>
+      <div class="stat" id="spot-stat">
         <span class="value" id="spot">&ndash;</span>
         <span class="chg" id="spot-chg"></span>
       </div>
@@ -41,6 +42,11 @@
       </label>
       <button type="submit" class="btn primary" id="apply" hidden>Apply</button>
     </form>
+
+    <div class="segmented" id="overlays" role="group" aria-label="Overlays">
+      <button type="button" data-overlay="vwap" aria-pressed="true" title="Intraday VWAP of the straddle: CE + PE price weighted by CE + PE volume since 09:15">VWAP</button>
+      <button type="button" data-overlay="sma" aria-pressed="true" title="Simple moving average of the last 10 column midpoints">SMA 10</button>
+    </div>
 
     <div class="zoom" role="group" aria-label="Zoom">
       <button type="button" class="icon-btn" id="zoom-out" title="Smaller boxes">&minus;</button>

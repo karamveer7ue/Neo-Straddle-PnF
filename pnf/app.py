@@ -13,9 +13,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .engine import Engine
+from .engine import KEEP, Engine
 from .neo import NeoError, NeoGateway
-from .series import DEFAULT_EXPIRY_ROLE, MAX_DAYS, MIN_DAYS, STRIKE_STEP
+from .series import DEFAULT_EXPIRY_ROLE, DEFAULT_UNDERLYING, MAX_DAYS, MIN_DAYS, UNDERLYINGS
 
 STATIC = Path(__file__).parent / "static"
 
@@ -53,7 +53,10 @@ class LoginBody(BaseModel):
 
 
 class ConfigBody(BaseModel):
-    atm: int | None = Field(default=None, ge=1000, le=100000)  # None = from today's open
+    underlying: Literal["NIFTY", "SENSEX"] = DEFAULT_UNDERLYING
+    # An override strike for `underlying`, or None for the day's open. Leaving the
+    # field out keeps that underlying's stored choice (used when switching index).
+    atm: int | None = Field(default=None, ge=1000, le=1_000_000)
     days: int = Field(ge=MIN_DAYS, le=MAX_DAYS)
     expiry: Literal["week1", "week2", "month1", "month2"] = DEFAULT_EXPIRY_ROLE
 
@@ -77,9 +80,11 @@ async def login(body: LoginBody):
 
 @app.post("/api/config", status_code=202)
 async def configure(body: ConfigBody):
-    if body.atm is not None and body.atm % STRIKE_STEP:
-        raise HTTPException(status_code=422, detail=f"ATM must be a multiple of {STRIKE_STEP}")
-    app.state.engine.configure(body.atm, body.days, body.expiry)
+    step = UNDERLYINGS[body.underlying].strike_step
+    if body.atm is not None and body.atm % step:
+        raise HTTPException(status_code=422, detail=f"{body.underlying} ATM must be a multiple of {step}")
+    atm = body.atm if "atm" in body.model_fields_set else KEEP
+    app.state.engine.configure(body.underlying, body.days, body.expiry, atm=atm)
     return body.model_dump()
 
 

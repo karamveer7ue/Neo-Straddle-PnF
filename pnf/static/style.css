@@ -19,6 +19,8 @@
   --o: #d1373f;
   --vwap: #c9a400;
   --vwap-text: #15181d;
+  --sma: #4b4f57; /* light black */
+  --sma-text: #ffffff;
 
   --plot-bg: #ffffff;
   --plot-strip: #f7f8fa;
@@ -47,6 +49,8 @@
     --o: #f26d73;
     --vwap: #ffdd00;
     --vwap-text: #0d1014;
+    --sma: #aab0ba; /* a near-black line would vanish on the dark background */
+    --sma-text: #0d1014;
 
     --plot-bg: #14181e;
     --plot-strip: #171c23;
@@ -101,6 +105,40 @@ button, input, select { font: inherit; color: inherit; }
   color: var(--text-3);
   font-size: 11.5px;
 }
+
+/* NIFTY | SENSEX switch */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+
+.segmented button {
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.segmented button:hover { color: var(--text-1); }
+
+.segmented button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+/* Overlay toggles are independent, each shown in its line colour when on. */
+#overlays button[data-overlay="vwap"][aria-pressed="true"] { color: var(--vwap); }
+#overlays button[data-overlay="sma"][aria-pressed="true"] { color: var(--sma); }
 
 .stats { display: flex; gap: 20px; }
 
@@ -337,6 +375,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 .ph-vwap { color: var(--vwap); }
+.ph-sma { color: var(--sma); }
 
 .ph-quote { text-align: right; }
 
@@ -457,6 +496,7 @@ button, input, select { font: inherit; color: inherit; }
 .tooltip .tip-signal.buy { color: var(--x); }
 .tooltip .tip-signal.sell { color: var(--o); }
 .tooltip .tip-vwap { margin-top: 2px; color: var(--vwap); }
+.tooltip .tip-sma { margin-top: 2px; color: var(--sma); }
 .tooltip b.x { color: var(--x); }
 .tooltip b.o { color: var(--o); }
 .tooltip .muted { color: var(--text-3); }
@@ -524,9 +564,18 @@ button, input, select { font: inherit; color: inherit; }
 
 [hidden] { display: none !important; }
 
+@media (max-width: 1600px) {
+  .brand { display: none; } /* the index toggle names what is on screen */
+}
+
 @media (max-width: 1440px) {
-  .brand p { display: none; }
-  .stats { gap: 14px; }
+  .topbar { column-gap: 14px; }
+}
+
+@media (max-width: 1366px) {
+  .stats .chg { display: none; }
+  .topbar { column-gap: 12px; }
+  .segmented button { padding: 0 9px; }
 }
 
 @media (max-width: 1100px) {

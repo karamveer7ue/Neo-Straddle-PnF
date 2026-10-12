@@ -12,13 +12,13 @@ from datetime import date
 
 from neo_api_client import NeoAPI
 
+from .series import Underlying
+
 log = logging.getLogger(__name__)
 
 MIN_CALL_GAP = 1.5  # seconds between REST calls
 MAX_RETRIES = 6
 RETRY_BACKOFF_CAP = 60
-
-NIFTY_INDEX = "Nifty 50"  # index token for quotes, history and the WebSocket
 
 
 class NeoError(RuntimeError):
@@ -113,23 +113,23 @@ class NeoGateway:
 
     # ---------------- Market data (consumer key only) ----------------
 
-    async def expiries(self) -> list[str]:
+    async def expiries(self, u: Underlying) -> list[str]:
         response = await self._call_with_retry(
-            self.client.expiries, exchange="nse_fo", underlying="NIFTY", instrument_type="option"
+            self.client.expiries, exchange=u.fo_segment, underlying=u.key, instrument_type="option"
         )
         if is_error(response) or not response.get("expiries"):
-            raise NeoError(f"Could not load NIFTY expiries: {response}")
+            raise NeoError(f"Could not load {u.key} expiries: {response}")
         return response["expiries"]
 
-    async def nifty_quote(self) -> dict:
-        """Latest NIFTY quote: {'ltp', 'open', 'prev_close'} (latest session)."""
+    async def index_quote(self, u: Underlying) -> dict:
+        """Latest index quote: {'ltp', 'open', 'prev_close'} (latest session)."""
         response = await self._call_with_retry(
             self.client.quotes,
-            instrument_tokens=[{"instrument_token": NIFTY_INDEX, "exchange_segment": "nse_cm"}],
+            instrument_tokens=[{"instrument_token": u.index_token, "exchange_segment": u.index_segment}],
             quote_type="all",
         )
         if not isinstance(response, list) or not response:
-            raise NeoError(f"Could not load the NIFTY quote: {response}")
+            raise NeoError(f"Could not load the {u.key} quote: {response}")
         row = response[0]
         ohlc = row.get("ohlc", {})
         ltp = float(row["ltp"])
@@ -139,35 +139,44 @@ class NeoGateway:
             "prev_close": ltp - float(row.get("change") or 0),
         }
 
-    async def option_contracts(self, expiry: date, strikes: list[int]) -> dict[tuple[int, str], dict]:
-        """Map (strike, 'CE'|'PE') -> {'token', 'symbol'} for NIFTY options of one expiry."""
+    async def option_contracts(
+        self, u: Underlying, expiry: date, strikes: list[int]
+    ) -> dict[tuple[int, str], dict]:
+        """Map (strike, 'CE'|'PE') -> leg for one expiry of the underlying's options.
+
+        A leg is {"key": "<segment>|<token>", "segment", "token", "symbol"}; the key
+        is unique across exchanges (NSE and BSE token numbers can overlap).
+        """
         response = await self._call_with_retry(
             self.client.search_scrip,
-            exchange_segment="nse_fo",
-            symbol="nifty",
+            exchange_segment=u.fo_segment,
+            symbol=u.key.lower(),
             expiry=expiry.strftime("%d%b%Y"),
             option_type="CE,PE",
         )
         if not isinstance(response, list):
-            raise NeoError(f"Scrip search failed for NIFTY {expiry}: {response}")
+            raise NeoError(f"Scrip search failed for {u.key} {expiry}: {response}")
         wanted = set(strikes)
         found = {}
         for row in response:
-            if str(row.get("pSymbolName", "")).strip().upper() != "NIFTY":
+            if str(row.get("pSymbolName", "")).strip().upper() != u.key:
                 continue  # substring search also matches e.g. NIFTYNXT50
             strike = round(float(row["dStrikePrice;"]) / 100)  # scrip master stores paise
             if strike in wanted:
+                token = str(row["pSymbol"])
                 found[(strike, str(row["pOptionType"]).upper())] = {
-                    "token": str(row["pSymbol"]),
+                    "key": f"{u.fo_segment}|{token}",
+                    "segment": u.fo_segment,
+                    "token": token,
                     "symbol": row["pTrdSymbol"],
                 }
         return found
 
-    async def history(self, token: str, from_date: date, to_date: date) -> list:
-        """Raw 1-min candles for an nse_fo token over [from_date, to_date]."""
+    async def history(self, neosymbol: str, from_date: date, to_date: date) -> list:
+        """Raw 1-min candles for a "<segment>|<token>" instrument over [from_date, to_date]."""
         response = await self._call_with_retry(
             self.client.historical_data,
-            neosymbol=f"nse_fo|{token}",
+            neosymbol=neosymbol,
             interval="1min",
             from_date=from_date.isoformat(),
             to_date=to_date.isoformat(),
@@ -180,7 +189,7 @@ class NeoGateway:
             or error_code(response) is not None
             or status not in ("success", "")
         ):
-            raise NeoError(f"History failed for {token} {from_date}..{to_date}: {response}")
+            raise NeoError(f"History failed for {neosymbol} {from_date}..{to_date}: {response}")
         return response.get("data", {}).get("candles", [])
 
     # ---------------- Session (TOTP + MPIN) ----------------

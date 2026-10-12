@@ -6,6 +6,7 @@ minute start; all calendar logic is in IST.
 """
 
 import math
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -13,24 +14,49 @@ IST = ZoneInfo("Asia/Kolkata")
 
 SESSION_OPEN = time(9, 15)
 LAST_MINUTE = time(15, 29)  # last 1-min candle of the 09:15-15:30 session
-STRIKE_STEP = 50  # NIFTY option strike interval
 
-# Chart key -> strike offset from ATM, in display order (left to right).
-CHART_OFFSETS = {"atm_minus_200": -200, "atm": 0, "atm_plus_200": 200}
+
+@dataclass(frozen=True)
+class Underlying:
+    """An index whose ATM and side straddles are charted."""
+
+    key: str  # "NIFTY"; also the scrip-master pSymbolName and the expiries() underlying
+    fo_segment: str  # where its options trade
+    index_segment: str  # where the index itself is quoted
+    index_token: str  # the index token for quotes, history and the WebSocket
+    strike_step: int
+    side_offset: int  # the side charts sit at ATM - offset and ATM + offset
+
+    @property
+    def chart_offsets(self) -> dict[str, int]:
+        """Chart key -> strike offset from ATM, in display order (left to right)."""
+        return {"atm_minus": -self.side_offset, "atm": 0, "atm_plus": self.side_offset}
+
+    def to_json(self) -> dict:
+        return {"key": self.key, "strikeStep": self.strike_step, "sideOffset": self.side_offset}
+
+
+# NIFTY trades on NSE; SENSEX on BSE. Both index tokens are names, not numbers.
+UNDERLYINGS = {
+    "NIFTY": Underlying("NIFTY", "nse_fo", "nse_cm", "Nifty 50", strike_step=50, side_offset=200),
+    "SENSEX": Underlying("SENSEX", "bse_fo", "bse_cm", "SENSEX", strike_step=100, side_offset=500),
+}
+DEFAULT_UNDERLYING = "NIFTY"
 
 MIN_DAYS, MAX_DAYS = 1, 15  # 15 trading days stays inside one 30-day 1-min request
 
-# One leg's 1-min candle: (minute start epoch seconds, close, typical price, volume).
-Candle = tuple[int, float, float, int]
-# One straddle minute: (minute start epoch seconds, CE+PE close, CE+PE VWAP or None).
-Bar = tuple[int, float, float | None]
+# One leg's 1-min candle: (minute start epoch seconds, close, volume).
+Candle = tuple[int, float, int]
+# One straddle minute: (minute start epoch seconds, CE+PE close, CE+PE volume that minute).
+# The browser weights closes by this volume to get each P&F column's VWAP.
+Bar = tuple[int, float, int]
 
 
 def now_ist() -> datetime:
     return datetime.now(IST)
 
 
-def round_to_strike(price: float, step: int = STRIKE_STEP) -> int:
+def round_to_strike(price: float, step: int) -> int:
     """Nearest strike, rounding halves up (not Python's banker's rounding)."""
     return math.floor(price / step + 0.5) * step
 
@@ -78,7 +104,8 @@ def expiry_choices(roles: dict[str, date]) -> list[dict]:
         if role in roles:
             by_date[roles[role]] = role
     return [
-        {"role": role, "date": d.isoformat(), "label": f"{d:%d %b} \u00b7 {EXPIRY_ROLES[role]}"}
+        # The date already tells the two weeklies (and the two monthlies) apart.
+        {"role": role, "date": d.isoformat(), "label": f"{d:%d %b} \u00b7 {EXPIRY_ROLES[role].split()[-1]}"}
         for d, role in sorted(by_date.items())
     ]
 
@@ -111,42 +138,31 @@ def parse_candles(candles: list) -> list[Candle]:
     for row in candles:
         moment = datetime.fromisoformat(row[0]).astimezone(IST)
         if in_session(moment):
-            high, low, close = float(row[2]), float(row[3]), float(row[4])
             volume = int(row[5]) if len(row) > 5 and row[5] else 0
             ts = int(moment.timestamp())
-            out[ts] = (ts, close, (high + low + close) / 3, volume)
+            out[ts] = (ts, float(row[4]), volume)
     return [out[ts] for ts in sorted(out)]
 
 
 def straddle_series(ce: list[Candle], pe: list[Candle]) -> list[Bar]:
-    """CE + PE close and CE + PE VWAP per minute.
+    """CE + PE close per minute, with the volume both legs traded that minute.
 
     Illiquid strikes skip minutes, so each leg carries its last close
-    forward; the series starts once both legs have traded. Each leg's VWAP
-    is anchored at the session open (typical price x volume, cumulated
-    from 09:15) and is None until both legs have traded volume that day.
+    forward (contributing no volume); the series starts once both legs
+    have traded.
     """
     legs = [{c[0]: c for c in ce}, {c[0]: c for c in pe}]
     last = [None, None]
-    sums = [[0.0, 0], [0.0, 0]]  # per leg: [sum(typical * volume), sum(volume)]
-    day = None
     out = []
     for ts in sorted(legs[0].keys() | legs[1].keys()):
-        if session_date(ts) != day:
-            day = session_date(ts)
-            sums = [[0.0, 0], [0.0, 0]]
+        minute_volume = 0
         for i, leg in enumerate(legs):
             candle = leg.get(ts)
             if candle:
                 last[i] = candle[1]
-                sums[i][0] += candle[2] * candle[3]
-                sums[i][1] += candle[3]
-        if last[0] is None or last[1] is None:
-            continue
-        vwap = None
-        if sums[0][1] and sums[1][1]:
-            vwap = round(sums[0][0] / sums[0][1] + sums[1][0] / sums[1][1], 2)
-        out.append((ts, round(last[0] + last[1], 2), vwap))
+                minute_volume += candle[2]
+        if last[0] is not None and last[1] is not None:
+            out.append((ts, round(last[0] + last[1], 2), minute_volume))
     return out
 
 

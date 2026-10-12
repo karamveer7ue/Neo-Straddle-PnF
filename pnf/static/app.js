@@ -2,10 +2,12 @@ import { raiseAlert, requestNotifications, setSoundEnabled, soundEnabled } from 
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from './chart.js';
 
 const MAX_DAYS = 15;
-const STRIKE_STEP = 50;
 
 const $ = (id) => document.getElementById(id);
 const els = {
+  brandTitle: $('brand-title'),
+  underlyings: $('underlyings'),
+  spotStat: $('spot-stat'),
   spot: $('spot'),
   spotChg: $('spot-chg'),
   expiry: $('expiry'),
@@ -18,6 +20,7 @@ const els = {
   zoomOut: $('zoom-out'),
   zoomFit: $('zoom-fit'),
   sound: $('sound'),
+  overlays: $('overlays'),
   pill: $('feed-pill'),
   login: $('login'),
   totp: $('totp'),
@@ -49,6 +52,19 @@ const state = {
 };
 
 const SIGNAL_NAMES = { buy: 'Double top buy', sell: 'Double bottom sell' };
+const OVERLAYS_KEY = 'pnf.overlays';
+
+function loadOverlays() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(OVERLAYS_KEY));
+    if (saved && typeof saved.vwap === 'boolean' && typeof saved.sma === 'boolean') return saved;
+  } catch {
+    // unreadable or blocked storage: defaults
+  }
+  return { vwap: true, sma: true };
+}
+
+state.overlays = loadOverlays();
 const FLASH_MS = 8000;
 
 for (let d = 1; d <= MAX_DAYS; d++) els.days.add(new Option(String(d), String(d)));
@@ -84,6 +100,7 @@ function buildPanels(charts) {
     els.charts.append(root);
     const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip });
     panel.setCell(state.cellOverride);
+    panel.setOverlays(state.overlays);
     state.panels.set(def.key, { root, panel, def });
   }
 }
@@ -101,16 +118,21 @@ function renderPanelHead(entry) {
   q('.ph-offset').textContent = offsetLabel(def.offset);
   q('.ph-strike').textContent = `${fmtStrike(def.strike)} straddle`;
 
-  const legPrice = (leg) => (leg && state.legs[leg.token] != null ? fmtPrice(state.legs[leg.token]) : '–');
+  const legPrice = (leg) => (leg && state.legs[leg.key] != null ? fmtPrice(state.legs[leg.key]) : '–');
   const legs = q('.ph-legs');
   if (def.error) {
     legs.replaceChildren();
   } else {
-    const vwap = panel.currentVwap;
-    const vwapEl = document.createElement('span');
-    vwapEl.className = 'ph-vwap';
-    vwapEl.textContent = `VWAP ${vwap != null ? fmtPrice(vwap) : '–'}`;
-    legs.replaceChildren(`CE ${legPrice(def.ce)} · PE ${legPrice(def.pe)} · `, vwapEl);
+    const parts = [`CE ${legPrice(def.ce)} · PE ${legPrice(def.pe)}`];
+    const overlayValue = (cls, label, value) => {
+      const el = document.createElement('span');
+      el.className = cls;
+      el.textContent = `${label} ${value != null ? fmtPrice(value) : '–'}`;
+      parts.push(' · ', el);
+    };
+    if (state.overlays.vwap) overlayValue('ph-vwap', 'VWAP', panel.currentVwap);
+    if (state.overlays.sma) overlayValue('ph-sma', `SMA${panel.pnf?.smaPeriod ?? 10}`, panel.currentSma);
+    legs.replaceChildren(...parts);
   }
   q('.ph-legs').title = def.error ? '' : `${def.ce.symbol} + ${def.pe.symbol}`;
 
@@ -160,14 +182,14 @@ function renderSignalChip(el, panel) {
 
 function alertSignals(entry, signals) {
   for (const s of signals) {
-    const key = `${entry.def.ce?.token}:${s.type}:${s.ts}:${s.row}`;
+    const key = `${entry.def.ce?.key}:${s.type}:${s.ts}:${s.row}`;
     if (state.alerted.has(key)) continue;
     state.alerted.add(key);
     const price = entry.panel.pnf.price(s.row);
     raiseAlert({
       type: s.type,
       title: `${SIGNAL_NAMES[s.type]} \u00b7 ${offsetLabel(entry.def.offset)}`,
-      detail: `${fmtStrike(entry.def.strike)} straddle broke ${s.type === 'buy' ? 'above' : 'below'} ` +
+      detail: `${builtKey()} ${fmtStrike(entry.def.strike)} straddle broke ${s.type === 'buy' ? 'above' : 'below'} ` +
         `${fmtPrice(entry.panel.pnf.price(s.level))} \u2192 ${fmtPrice(price)} at ${fmtTime(s.ts)}`,
     });
     flashPanel(entry.root, s.type);
@@ -182,6 +204,32 @@ function flashPanel(root, type) {
   root.flashTimer = setTimeout(() => root.classList.remove(`flash-${type}`), FLASH_MS);
 }
 
+/** The index the charts on screen were built for (may lag a just-clicked switch). */
+const builtKey = () => state.config?.built.key ?? '';
+
+function renderUnderlyings(cfg) {
+  const keys = cfg.underlyings ?? [];
+  if (els.underlyings.dataset.keys !== keys.join()) {
+    els.underlyings.replaceChildren(...keys.map((key) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = key;
+      btn.dataset.key = key;
+      btn.addEventListener('click', () => {
+        if (key === state.config?.underlying) return;
+        state.atmDirty = false;
+        // No `atm`: the server restores that index's own ATM choice.
+        submitConfig({ underlying: key }).then(renderTopbar);
+      });
+      return btn;
+    }));
+    els.underlyings.dataset.keys = keys.join();
+  }
+  for (const btn of els.underlyings.children) {
+    btn.setAttribute('aria-pressed', String(btn.dataset.key === cfg.underlying));
+  }
+}
+
 function renderPanels() {
   for (const entry of state.panels.values()) renderPanelHead(entry);
 }
@@ -194,14 +242,20 @@ function renderTopbar() {
 
   const cfg = state.config;
   if (cfg) {
+    const u = cfg.built;
+    renderUnderlyings(cfg);
     renderExpiryOptions(cfg);
+    els.brandTitle.textContent = `${u.key} straddle`;
+    document.title = `${u.key} Straddle P&F`;
+    els.spotStat.title = `${u.key} index`;
+    els.atm.step = String(u.strikeStep);
     if (!state.atmDirty && document.activeElement !== els.atm && cfg.atm != null) els.atm.value = cfg.atm;
     els.days.value = String(cfg.days);
     const auto = cfg.atmOverride == null && !state.atmDirty;
     els.atmAuto.setAttribute('aria-pressed', String(auto));
-    els.atmAuto.title = cfg.niftyOpen != null
-      ? `Use the strike nearest to today's NIFTY open (${fmtPrice(cfg.niftyOpen)} → ${fmtStrike(cfg.atmAuto)})`
-      : "Use the strike nearest to today's NIFTY open";
+    els.atmAuto.title = cfg.indexOpen != null
+      ? `Use the strike nearest to today's ${u.key} open (${fmtPrice(cfg.indexOpen)} → ${fmtStrike(cfg.atmAuto)})`
+      : `Use the strike nearest to today's ${u.key} open`;
   }
 
   els.apply.hidden = !state.atmDirty;
@@ -217,7 +271,8 @@ function renderTopbar() {
   const loggedIn = !!feed?.loggedIn;
   const showLogin = state.connected && !loggedIn && (feed?.totpRequired || state.wantLogin);
   els.login.hidden = !showLogin;
-  els.pill.hidden = showLogin;
+  // "Go live" already says the feed is off, so the pill only reports other states.
+  els.pill.hidden = showLogin || (state.connected && !loggedIn && fs === 'offline');
   els.goLive.hidden = !state.connected || loggedIn || showLogin;
   els.totp.setAttribute('aria-invalid', String(!!state.loginError));
   els.totp.title = state.loginError;
@@ -287,7 +342,8 @@ function showTooltip(desc, hover) {
   const signal = desc.signal
     ? `<div class="tip-signal ${desc.signal}">${desc.signal === 'buy' ? '\u25b2' : '\u25bc'} ${SIGNAL_NAMES[desc.signal]}</div>`
     : '';
-  const vwap = desc.vwap != null ? `<div class="tip-vwap">VWAP ${fmtPrice(desc.vwap)}</div>` : '';
+  const vwap = (desc.vwap != null ? `<div class="tip-vwap">VWAP ${fmtPrice(desc.vwap)}</div>` : '') +
+    (desc.sma != null ? `<div class="tip-sma">SMA 10 ${fmtPrice(desc.sma)}</div>` : '');
   tip.innerHTML = `${signal}<b class="${dir}">${desc.dir}</b> ${fmtPrice(desc.price)} <span class="muted">· ${desc.when}${
     desc.provisional ? ' · forming' : ''
   }</span>${vwap}`;
@@ -309,8 +365,8 @@ function applyLive(live) {
   state.live = live;
   for (const entry of state.panels.values()) {
     const price = live?.straddles?.[entry.def.key];
-    const vwap = live?.vwaps?.[entry.def.key] ?? null;
-    entry.panel.setLive(price != null ? { ts: live.minute, price, vwap } : null);
+    const volume = live?.volumes?.[entry.def.key] ?? 0;
+    entry.panel.setLive(price != null ? { ts: live.minute, price, volume } : null);
   }
   if (live?.legs) Object.assign(state.legs, live.legs);
 }
@@ -326,7 +382,7 @@ const handlers = {
     buildPanels(msg.charts);
     for (const def of msg.charts) {
       const entry = state.panels.get(def.key);
-      const changed = entry.def.strike !== def.strike || entry.def.ce?.token !== def.ce?.token;
+      const changed = entry.def.strike !== def.strike || entry.def.ce?.key !== def.ce?.key;
       entry.def = def;
       if (changed || !entry.panel.series.length) entry.panel.setSeries(def.series);
       else {
@@ -398,10 +454,14 @@ async function post(url, body) {
   return res.json();
 }
 
-/** Post the current controls, with `overrides` taking precedence. */
+/**
+ * Post the current controls, with `overrides` taking precedence. `atm` is sent
+ * only when the user set it (a strike, or null for Auto); otherwise the server
+ * keeps the stored choice for that index.
+ */
 async function submitConfig(overrides = {}) {
   const body = {
-    atm: state.atmDirty ? Number(els.atm.value) : state.config?.atmOverride ?? null,
+    underlying: state.config?.underlying ?? 'NIFTY',
     days: Number(els.days.value),
     expiry: els.expiry.value || state.config?.expiryRole || 'week1',
     ...overrides,
@@ -418,13 +478,16 @@ async function submitConfig(overrides = {}) {
 els.config.addEventListener('submit', (e) => {
   e.preventDefault();
   const atm = Number(els.atm.value);
-  if (!Number.isInteger(atm) || atm % STRIKE_STEP) {
-    els.atm.setCustomValidity(`ATM must be a multiple of ${STRIKE_STEP}`);
+  const u = state.config?.built;
+  if (!u) return;
+  if (!Number.isInteger(atm) || atm % u.strikeStep) {
+    els.atm.setCustomValidity(`${u.key} ATM must be a multiple of ${u.strikeStep}`);
     els.atm.reportValidity();
     return;
   }
   els.atm.blur();
-  submitConfig({ atm }).then(renderTopbar);
+  // The strike typed applies to the index on screen.
+  submitConfig({ underlying: u.key, atm }).then(renderTopbar);
 });
 
 els.atm.addEventListener('input', () => {
@@ -435,7 +498,7 @@ els.atm.addEventListener('input', () => {
 
 els.atmAuto.addEventListener('click', () => {
   state.atmDirty = false;
-  submitConfig({ atm: null }).then(renderTopbar);
+  submitConfig({ ...(builtKey() && { underlying: builtKey() }), atm: null }).then(renderTopbar);
 });
 
 els.atm.addEventListener('keydown', (e) => {
@@ -455,6 +518,27 @@ function renderSound() {
   els.sound.setAttribute('aria-pressed', String(on));
   els.sound.title = on ? 'Alert sounds on - click to mute' : 'Alert sounds muted - click to unmute';
 }
+
+function renderOverlayToggles() {
+  for (const btn of els.overlays.querySelectorAll('button')) {
+    btn.setAttribute('aria-pressed', String(state.overlays[btn.dataset.overlay]));
+  }
+}
+
+els.overlays.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-overlay]');
+  if (!btn) return;
+  state.overlays = { ...state.overlays, [btn.dataset.overlay]: !state.overlays[btn.dataset.overlay] };
+  try {
+    localStorage.setItem(OVERLAYS_KEY, JSON.stringify(state.overlays));
+  } catch {
+    // storage unavailable: the choice lasts for this page only
+  }
+  for (const { panel } of state.panels.values()) panel.setOverlays(state.overlays);
+  renderOverlayToggles();
+  renderPanels();
+});
+renderOverlayToggles();
 
 els.sound.addEventListener('click', () => {
   setSoundEnabled(!soundEnabled());

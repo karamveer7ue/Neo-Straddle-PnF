@@ -21,17 +21,18 @@ def ts(text: str) -> int:
 
 
 @pytest.mark.parametrize(
-    "price, strike",
+    "price, step, strike",
     [
-        (22314.95, 22300),
-        (22325.0, 22350),
-        (22324.99, 22300),
-        (22375.0, 22400),
-        (22350.0, 22350),
+        (22314.95, 50, 22300),
+        (22325.0, 50, 22350),  # halves round up
+        (22324.99, 50, 22300),
+        (22350.0, 50, 22350),
+        (72349.5, 100, 72300),  # SENSEX: 100-point strikes
+        (72350.0, 100, 72400),
     ],
 )
-def test_round_to_strike_rounds_halves_up(price, strike):
-    assert round_to_strike(price) == strike
+def test_round_to_strike_rounds_halves_up(price, step, strike):
+    assert round_to_strike(price, step) == strike
 
 
 # Real NIFTY expiry list as returned on 2026-10-11 (holiday-shifted dates included).
@@ -48,9 +49,9 @@ def test_expiry_roles_pick_two_weeklies_and_two_monthlies():
     }
     assert [c["label"] for c in expiry_choices(roles)] == [
         "13 Oct \u00b7 weekly",
-        "19 Oct \u00b7 next weekly",
+        "19 Oct \u00b7 weekly",
         "27 Oct \u00b7 monthly",
-        "23 Nov \u00b7 next monthly",
+        "23 Nov \u00b7 monthly",
     ]
 
 
@@ -79,34 +80,23 @@ def test_parse_candles_keeps_session_minutes_only():
         ["2026-10-09T15:39:00+0530", 1, 1, 1, 104.0, 0],
     ]
     assert parse_candles(candles) == [
-        (ts("2026-10-09T09:15:00"), 101.0, (103.0 + 98.0 + 101.0) / 3, 500),
-        (ts("2026-10-09T15:29:00"), 102.0, 102.0, 0),
+        (ts("2026-10-09T09:15:00"), 101.0, 500),
+        (ts("2026-10-09T15:29:00"), 102.0, 0),
     ]
 
 
 def test_straddle_series_forward_fills_illiquid_leg():
     a, b, c = ts("2026-10-09T09:15:00"), ts("2026-10-09T09:16:00"), ts("2026-10-09T09:17:00")
-    ce = [(a, 100.0, 100.0, 10), (b, 101.5, 101.5, 10), (c, 102.0, 102.0, 10)]
-    pe = [(b, 50.25, 50.25, 10)]  # PE first trades at 09:16, then not at 09:17
+    ce = [(a, 100.0, 10), (b, 101.5, 10), (c, 102.0, 10)]
+    pe = [(b, 50.25, 10)]  # PE first trades at 09:16, then not at 09:17
     assert [bar[:2] for bar in straddle_series(ce, pe)] == [(b, 151.75), (c, 152.25)]
 
 
-def test_straddle_vwap_sums_leg_vwaps_and_resets_each_session():
-    d1a, d1b = ts("2026-10-08T15:28:00"), ts("2026-10-08T15:29:00")
-    d2 = ts("2026-10-09T09:15:00")
-    # CE VWAP on day 1: (100*1 + 110*3) / 4 = 107.5; PE VWAP: 50 (only one candle).
-    ce = [(d1a, 100.0, 100.0, 1), (d1b, 110.0, 110.0, 3), (d2, 90.0, 90.0, 2)]
-    pe = [(d1a, 50.0, 50.0, 5), (d2, 40.0, 40.0, 1)]
-    assert straddle_series(ce, pe) == [
-        (d1a, 150.0, 150.0),
-        (d1b, 160.0, 157.5),  # PE carried forward at 50, its VWAP unchanged
-        (d2, 130.0, 130.0),  # new session: VWAP restarts from the 09:15 candle
-    ]
-
-
-def test_straddle_vwap_waits_for_volume_on_both_legs():
-    a = ts("2026-10-09T09:15:00")
-    assert straddle_series([(a, 100.0, 100.0, 0)], [(a, 50.0, 50.0, 7)]) == [(a, 150.0, None)]
+def test_straddle_series_carries_combined_minute_volume():
+    a, b = ts("2026-10-09T09:15:00"), ts("2026-10-09T09:16:00")
+    ce = [(a, 100.0, 7), (b, 101.0, 4)]
+    pe = [(a, 50.0, 3)]  # no PE candle at 09:16: price carried forward, no volume
+    assert straddle_series(ce, pe) == [(a, 150.0, 10), (b, 151.0, 4)]
 
 
 def test_last_sessions_filters_by_ist_date():

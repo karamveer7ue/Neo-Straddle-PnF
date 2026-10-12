@@ -4,7 +4,8 @@
 // provides native scrolling; on every scroll or data change only the visible
 // part is redrawn. That keeps memory flat however long the chart grows.
 
-import { buildPnf } from './pnf.js';
+import { TAG_H, placeTags } from './axis.js';
+import { buildPnf, istDay } from './pnf.js';
 
 const HEADER = 24; // date strip height (CSS px)
 const AXIS = 72; // price axis width
@@ -41,6 +42,8 @@ function readTheme() {
     accentText: v('--accent-text'),
     vwap: v('--vwap'),
     vwapText: v('--vwap-text'),
+    sma: v('--sma'),
+    smaText: v('--sma-text'),
     separator: v('--plot-separator'),
     stripBg: v('--plot-strip'),
     hover: v('--plot-hover'),
@@ -73,6 +76,7 @@ export class PnfPanel {
     this.lastCommittedTs = -Infinity;
     this.dayMarks = [];
     this.cellOverride = null;
+    this.overlays = { vwap: true, sma: true };
     this.cell = 12;
     this.follow = true;
     this.hover = null; // {x, y} in CSS px within the plot
@@ -126,9 +130,15 @@ export class PnfPanel {
   setLive(live) {
     const last = this.series[this.series.length - 1];
     const next = live && (!last || live.ts > last[0]) ? live : null;
-    if (next?.price === this.live?.price && next?.ts === this.live?.ts && next?.vwap === this.live?.vwap) return;
+    const same = next?.price === this.live?.price && next?.ts === this.live?.ts && next?.volume === this.live?.volume;
+    if (same) return;
     this.live = next;
     this.recompute();
+  }
+
+  setOverlays(overlays) {
+    this.overlays = { ...overlays };
+    this.render();
   }
 
   setCell(cellOverride) {
@@ -138,12 +148,11 @@ export class PnfPanel {
   }
 
   recompute({ recenter = false } = {}) {
-    const bars = this.live ? [...this.series, [this.live.ts, this.live.price]] : this.series;
+    // The forming minute joins as a bar with the volume traded so far, so the
+    // newest column's VWAP moves in real time.
+    const bars = this.live ? [...this.series, [this.live.ts, this.live.price, this.live.volume ?? 0]] : this.series;
     this.lastCommittedTs = this.series.length ? this.series[this.series.length - 1][0] : -Infinity;
     this.pnf = buildPnf(bars);
-    this.vwapByTs = new Map(this.series.map((b) => [b[0], b[2] ?? null]));
-    if (this.live) this.vwapByTs.set(this.live.ts, this.live.vwap ?? null);
-    this.colDay = this.pnf?.columns.map((col) => dateKey(col.endTs)) ?? [];
 
     // Mark the column where each new session's first box printed.
     this.dayMarks = [];
@@ -207,14 +216,13 @@ export class PnfPanel {
     this.render();
   }
 
-  /** VWAP when column i last updated (null before both legs traded volume). */
-  colVwap(i) {
-    return this.vwapByTs.get(this.pnf.columns[i].endTs) ?? null;
+
+  get currentSma() {
+    return this.pnf?.sma.at(-1) ?? null;
   }
 
   get currentVwap() {
-    if (this.live) return this.live.vwap ?? null;
-    return this.series[this.series.length - 1]?.[2] ?? null;
+    return this.pnf?.vwap.at(-1) ?? null;
   }
 
   colX(i) {
@@ -308,30 +316,22 @@ export class PnfPanel {
       ctx.fillRect(this.colX(hit.col), this.rowY(hit.row), c, c);
     }
 
-    // Double top buy / double bottom sell: dashed line at the broken top or
-    // bottom (from the previous same-direction column) and a ringed box.
+    // Double top buy / double bottom sell: a solid bar over the previous two
+    // columns, sitting just beyond the level the signal broke - green above
+    // the old top for a buy, red below the old bottom for a sell. It lives in
+    // the row next to that level, which is empty in both columns.
+    const barH = Math.max(3, Math.round(c * 0.3));
+    const gap = Math.max(1, Math.round(c * 0.12));
     for (const s of pnf.signals) {
-      if (s.col < firstCol - 2 || s.col > lastCol) continue;
-      const color = s.type === 'buy' ? t.x : t.o;
-      const alpha = s.ts > this.lastCommittedTs ? 0.45 : 1;
-      const lineY = Math.round(s.type === 'buy' ? this.rowY(s.level) : this.rowY(s.level) + c) + 0.5;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = alpha * 0.9;
-      ctx.setLineDash([3, 2]);
+      if (s.col - 1 < firstCol || s.col - 2 > lastCol) continue;
+      const x0 = this.colX(s.col - 2) + 1;
+      const x1 = this.colX(s.col) - 1;
+      const y = s.type === 'buy' ? this.rowY(s.level) - gap - barH : this.rowY(s.level) + c + gap;
+      ctx.globalAlpha = s.ts > this.lastCommittedTs ? 0.45 : 1; // forming: faded
+      ctx.fillStyle = s.type === 'buy' ? t.x : t.o;
       ctx.beginPath();
-      ctx.moveTo(this.colX(s.col - 2), lineY);
-      ctx.lineTo(this.colX(s.col) + c, lineY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      const x = this.colX(s.col);
-      const y = this.rowY(s.row);
-      ctx.globalAlpha = alpha * 0.28;
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, c, c);
-      ctx.globalAlpha = alpha;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(x + 0.75, y + 0.75, c - 1.5, c - 1.5);
+      ctx.roundRect(x0, Math.round(y), x1 - x0, barH, barH / 2);
+      ctx.fill();
     }
     ctx.globalAlpha = 1;
 
@@ -361,25 +361,49 @@ export class PnfPanel {
     }
     ctx.globalAlpha = 1;
 
-    // VWAP: a step per column at its value when the column last updated,
-    // joined within a session and broken where the session (and VWAP) resets.
-    ctx.strokeStyle = t.vwap;
+    const fromCol = Math.max(0, firstCol - 1);
+    const toCol = Math.min(pnf.columns.length - 1, lastCol + 1);
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
-    ctx.beginPath();
-    let pen = false;
-    for (let i = Math.max(0, firstCol - 1); i <= Math.min(pnf.columns.length - 1, lastCol + 1); i++) {
-      const v = this.colVwap(i);
-      if (v === null || (i > 0 && this.colDay[i] !== this.colDay[i - 1])) pen = false;
-      if (v === null) continue;
-      const x = this.colX(i);
-      const y = Math.round(this.priceY(v)) + 0.5;
-      if (pen) ctx.lineTo(x, y);
-      else ctx.moveTo(x, y);
-      ctx.lineTo(x + c, y);
-      pen = true;
+
+    // SMA of the last N column midpoints: a line through the column centres.
+    // It is column-based, so unlike VWAP it runs straight across sessions.
+    if (this.overlays.sma) {
+      ctx.strokeStyle = t.sma;
+      ctx.beginPath();
+      let started = false;
+      for (let i = fromCol; i <= toCol; i++) {
+        const v = pnf.sma[i];
+        if (v === null) continue;
+        const x = this.colX(i) + c / 2;
+        const y = this.priceY(v);
+        if (started) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+        started = true;
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
+
+    // Intraday VWAP: a line through the column centres, each at the value it
+    // had when that column last updated, broken where a new session starts
+    // (VWAP restarts at 09:15).
+    if (this.overlays.vwap) {
+      ctx.strokeStyle = t.vwap;
+      ctx.beginPath();
+      let pen = false;
+      for (let i = fromCol; i <= toCol; i++) {
+        const v = pnf.vwap[i];
+        const newSession = i > 0 && istDay(pnf.columns[i].endTs) !== istDay(pnf.columns[i - 1].endTs);
+        if (v === null || newSession) pen = false;
+        if (v === null) continue;
+        const x = this.colX(i) + c / 2;
+        const y = this.priceY(v);
+        if (pen) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+        pen = true;
+      }
+      ctx.stroke();
+    }
 
     // Current price line
     const current = this.live?.price ?? this.series[this.series.length - 1]?.[1];
@@ -397,8 +421,16 @@ export class PnfPanel {
     ctx.restore();
 
     this.drawDateStrip(chartW);
+    // Axis tags in priority order: the price keeps its place, overlays yield.
+    const tags = [];
+    if (currentY !== null) tags.push({ y: currentY, value: current, bg: t.accent, fg: t.accentText });
     const vwap = this.currentVwap;
-    this.drawAxis(chartW, firstRow, lastRow, labelStep, current, currentY, hit, vwap);
+    if (this.overlays.vwap && vwap !== null) {
+      tags.push({ y: this.priceY(vwap), value: vwap, bg: t.vwap, fg: t.vwapText });
+    }
+    const sma = this.currentSma;
+    if (this.overlays.sma && sma !== null) tags.push({ y: this.priceY(sma), value: sma, bg: t.sma, fg: t.smaText });
+    this.drawAxis(chartW, firstRow, lastRow, labelStep, tags, hit);
     this.onHover?.(hit && hit.box ? this.describe(hit) : null, this.hover);
   }
 
@@ -441,7 +473,7 @@ export class PnfPanel {
     ctx.restore();
   }
 
-  drawAxis(chartW, firstRow, lastRow, labelStep, current, currentY, hit, vwap) {
+  drawAxis(chartW, firstRow, lastRow, labelStep, tags, hit) {
     const { ctx, height: H, cell: c, pnf } = this;
     const t = theme;
     ctx.fillStyle = t.stripBg;
@@ -456,18 +488,13 @@ export class PnfPanel {
     ctx.font = `11px ${t.font}`;
     ctx.textBaseline = 'middle';
     ctx.fillStyle = t.text;
-    // Tags (current price, hovered row) hide the regular labels they would overlap.
-    const clampY = (y) => Math.max(HEADER + 9, Math.min(H - 9, y));
-    const tagY = currentY === null ? null : clampY(currentY);
-    // The VWAP tag yields to the price tag: nudged a tag-height away when they meet.
-    let vwapY = vwap === null ? null : clampY(this.priceY(vwap));
-    if (vwapY !== null && tagY !== null && Math.abs(vwapY - tagY) < 18) {
-      vwapY = clampY(vwapY <= tagY ? tagY - 18 : tagY + 18);
-      if (Math.abs(vwapY - tagY) < 18) vwapY = clampY(vwapY <= tagY ? tagY + 18 : tagY - 18);
-    }
+
+    const placed = placeTags(tags, HEADER + TAG_H / 2, H - TAG_H / 2);
+    // The hovered-row readout is dropped where it would cover a tag.
     let hoverY = hit ? this.rowY(hit.row) + c / 2 : null;
-    if (hoverY !== null && [tagY, vwapY].some((ty) => ty !== null && Math.abs(hoverY - ty) < 18)) hoverY = null;
-    const covered = (y) => [tagY, vwapY, hoverY].some((ty) => ty !== null && Math.abs(ty - y) < 16);
+    if (hoverY !== null && placed.some((p) => Math.abs(hoverY - p.y) < TAG_H)) hoverY = null;
+    // Tags hide the regular labels they would overlap.
+    const covered = (y) => [...placed.map((p) => p.y), hoverY].some((ty) => ty !== null && Math.abs(ty - y) < 16);
     for (let row = Math.ceil(firstRow / labelStep) * labelStep; row <= lastRow; row += labelStep) {
       const y = this.rowY(row) + c / 2;
       if (y < HEADER + 7 || y > H - 7) continue; // would be cut in half by the edges
@@ -475,8 +502,8 @@ export class PnfPanel {
       if (!covered(y)) ctx.fillText(fmtPrice(pnf.price(row)), chartW + 8, y);
     }
     if (hoverY !== null) this.tag(chartW, hoverY, fmtPrice(pnf.price(hit.row)), t.textStrong, t.bg);
-    if (vwapY !== null) this.tag(chartW, vwapY, fmtPrice(vwap), t.vwap, t.vwapText);
-    if (tagY !== null) this.tag(chartW, tagY, fmtPrice(current), t.accent, t.accentText);
+    // Lowest priority first, so the price tag is drawn on top.
+    for (const p of [...placed].reverse()) this.tag(chartW, p.y, fmtPrice(p.value), p.bg, p.fg);
     ctx.restore();
   }
 
@@ -512,7 +539,8 @@ export class PnfPanel {
       when: `${fmtDay(hit.box.ts)} ${fmtTime(hit.box.ts)}`,
       provisional,
       signal: signal?.type ?? null,
-      vwap: this.colVwap(hit.col),
+      vwap: this.overlays.vwap ? this.pnf.vwap[hit.col] : null,
+      sma: this.overlays.sma ? this.pnf.sma[hit.col] : null,
     };
   }
 }

@@ -9,7 +9,7 @@ from neo_api_client.websocket.feed import SFeedScrip
 from pnf import engine as engine_mod
 from pnf.engine import Engine
 from pnf.neo import NeoError
-from pnf.series import IST
+from pnf.series import IST, UNDERLYINGS
 
 TODAY = date(2026, 10, 12)  # a Monday
 PAST_DAYS = [date(2026, 10, 7), date(2026, 10, 8), date(2026, 10, 9)]
@@ -25,33 +25,75 @@ def candles_for(day: date, minutes: int, base: float) -> list:
     return rows
 
 
+QUOTES = {
+    "NIFTY": {"ltp": 22520.45, "open": 22314.95, "prev_close": 22231.8},
+    "SENSEX": {"ltp": 72472.33, "open": 72349.5, "prev_close": 71593.24},
+}
+
+
+def leg(segment: str, strike: int, kind: str) -> dict:
+    """Fake leg; the token spells out strike and kind, e.g. "22300CE"."""
+    token = f"{strike}{kind}"
+    return {"key": f"{segment}|{token}", "segment": segment, "token": token, "symbol": f"X{token}"}
+
+
 class FakeGateway:
     def __init__(self, today_minutes=45, today_fails=False):
         self.logged_in = False
         self.today_minutes = today_minutes
         self.today_fails = today_fails
         self.history_calls = []
+        self.expiry_calls = []
+        self.subscriptions = []  # what the fake feed was asked for
 
-    async def expiries(self):
+    async def expiries(self, u):
+        self.expiry_calls.append(u.key)
         return ["2026-10-27", "2026-10-20", "2026-10-13", "2026-11-24"]
 
-    async def nifty_quote(self):
-        return {"ltp": 22520.45, "open": 22314.95, "prev_close": 22231.8}
+    async def index_quote(self, u):
+        return QUOTES[u.key]
 
-    async def option_contracts(self, expiry, strikes):
-        kinds = ("CE", "PE")
-        return {(s, k): {"token": f"{s}{k}", "symbol": f"NIFTY{s}{k}"} for s in strikes for k in kinds}
+    async def option_contracts(self, u, expiry, strikes):
+        return {(s, k): leg(u.fo_segment, s, k) for s in strikes for k in ("CE", "PE")}
 
-    async def history(self, token, from_date, to_date):
-        self.history_calls.append((token, from_date, to_date))
+    def create_feed(self):
+        return FakeFeed(self)
+
+    async def history(self, neosymbol, from_date, to_date):
+        self.history_calls.append((neosymbol, from_date, to_date))
         if self.today_fails and to_date >= TODAY:
             raise NeoError("same-day candles unavailable")
-        base = 100.0 if token.endswith("CE") else 50.0
+        base = 100.0 if neosymbol.endswith("CE") else 50.0
         rows = []
         for day in [*PAST_DAYS, TODAY]:
             if from_date <= day <= to_date:
                 rows += candles_for(day, self.today_minutes if day == TODAY else 375, base)
         return rows
+
+
+class FakeFeed:
+    """Records subscriptions, then ends without messages."""
+
+    def __init__(self, gw):
+        self.gw = gw
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def subscribe_scrips(self, tokens):
+        self.gw.subscriptions.append(("scrips", [(t.exchange_segment, t.instrument_token) for t in tokens]))
+
+    async def subscribe_index(self, tokens):
+        self.gw.subscriptions.append(("index", [(t.exchange_segment, t.instrument_token) for t in tokens]))
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
 
 
 @pytest.fixture
@@ -75,7 +117,8 @@ def ist_ts(h: int, m: int, day: date = TODAY) -> int:
     return int(datetime(day.year, day.month, day.day, h, m, tzinfo=IST).timestamp())
 
 
-def tick(token: str, price: float, atp: float = 0.0) -> SFeedScrip:
+def tick(token: str, price: float, volume: int = 0, segment: str = "nse_fo") -> SFeedScrip:
+    """A full scrip packet; `volume` is the leg's running day volume."""
     zero = dict.fromkeys(
         [
             "open_price",
@@ -99,17 +142,17 @@ def tick(token: str, price: float, atp: float = 0.0) -> SFeedScrip:
             "last_trade_qty",
             "total_buy_quantity",
             "total_sell_quantity",
-            "volume_traded_today",
             "open_interest",
         ],
         0,
     )
     return SFeedScrip(
-        exchange_segment="nse_fo",
+        exchange_segment=segment,
         instrument_token=token,
         level=4,
         last_traded_price=price,
-        average_trade_price=atp,
+        average_trade_price=0.0,
+        volume_traded_today=volume,
         market_lot=65,
         precision=2,
         multiplier=1,
@@ -128,15 +171,15 @@ def test_build_picks_atm_from_open_and_nearest_expiry(clock, make_engine):
     assert eng.window_dates == [date(2026, 10, 8), date(2026, 10, 9), TODAY]
     series = eng.charts[1].series()
     assert len(series) == 375 * 2 + 45
-    assert series[0] == (ist_ts(9, 15, date(2026, 10, 8)), 150.0, 150.0)
-    # VWAP is anchored per session: the second minute averages two equal-volume closes.
-    assert series[1] == (ist_ts(9, 16, date(2026, 10, 8)), 150.1, 150.05)
-    assert series[375] == (ist_ts(9, 15, date(2026, 10, 9)), 150.0, 150.0)
+    # (ts, straddle close, CE+PE volume); each leg trades 100 a minute.
+    assert series[0] == (ist_ts(9, 15, date(2026, 10, 8)), 150.0, 200)
+    assert series[1] == (ist_ts(9, 16, date(2026, 10, 8)), 150.1, 200)
+    assert series[375] == (ist_ts(9, 15, date(2026, 10, 9)), 150.0, 200)
 
 
 def test_atm_override_and_persistence(clock, make_engine):
     eng = make_engine()
-    eng.atm_override = 22400
+    eng.atm_overrides["NIFTY"] = 22400
     eng._save_config()
     asyncio.run(eng._build())
     assert [c.strike for c in eng.charts] == [22200, 22400, 22600]
@@ -144,6 +187,63 @@ def test_atm_override_and_persistence(clock, make_engine):
 
     restored = make_engine()
     assert restored.atm_override == 22400
+
+
+def test_sensex_builds_from_bse_with_its_own_strikes(clock, make_engine):
+    eng = make_engine()
+    eng.underlying_key = "SENSEX"
+    asyncio.run(eng._build())
+    assert eng.phase == "ready"
+    assert eng.gw.expiry_calls == ["SENSEX"]
+    assert eng.atm == 72300  # open 72,349.50 rounded to the 100-point strike grid
+    assert [c.strike for c in eng.charts] == [71800, 72300, 72800]  # ATM +/- 500
+    assert [c.offset for c in eng.charts] == [-500, 0, 500]
+    assert all(n.startswith("bse_fo|") for n, _, _ in eng.gw.history_calls)
+    assert eng.charts[1].ce["key"] == "bse_fo|72300CE"
+    assert eng.spot == QUOTES["SENSEX"]["ltp"]
+    assert eng.snapshot()["config"]["built"] == UNDERLYINGS["SENSEX"].to_json()
+
+
+def test_each_underlying_keeps_its_own_atm_override(clock, make_engine):
+    async def scenario(eng):
+        eng.configure("SENSEX", 3, "week1", atm=72500)
+        eng.configure("NIFTY", 3, "week1")  # switching back: NIFTY's choice is kept
+        eng._build_task.cancel()
+
+    eng = make_engine()
+    asyncio.run(scenario(eng))
+    assert eng.atm_overrides == {"NIFTY": None, "SENSEX": 72500}
+    assert eng.underlying_key == "NIFTY"
+    restored = make_engine()
+    assert restored.atm_overrides == {"NIFTY": None, "SENSEX": 72500}
+
+
+def test_old_config_file_with_a_single_override_still_loads(make_engine):
+    engine_mod.CONFIG_FILE.write_text('{"atm": 22400, "days": 5, "expiry": "month1"}')
+    eng = make_engine()
+    assert eng.atm_overrides == {"NIFTY": 22400, "SENSEX": None}
+    assert (eng.underlying_key, eng.days, eng.expiry_role) == ("NIFTY", 5, "month1")
+
+
+def test_live_feed_subscribes_to_the_built_exchange(clock, make_engine):
+    async def scenario(eng):
+        await eng._build()
+        eng.gw.logged_in = True
+        task = asyncio.create_task(eng._run_feed())
+        while len(eng.gw.subscriptions) < 2:
+            await asyncio.sleep(0.01)
+        task.cancel()
+
+    eng = make_engine()
+    eng.underlying_key = "SENSEX"
+    asyncio.run(scenario(eng))
+    kinds = dict(eng.gw.subscriptions)
+    assert kinds["index"] == [("bse_cm", "SENSEX")]
+    assert ("bse_fo", "72300CE") in kinds["scrips"] and len(kinds["scrips"]) == 6
+
+    # Ticks are keyed by segment, so a BSE token never feeds an NSE leg.
+    eng._on_feed(tick("72300CE", 410.0, segment="bse_fo"))
+    assert eng.ltp["bse_fo|72300CE"] == 410.0
 
 
 def test_expiry_role_selects_contract_and_lists_options(clock, make_engine):
@@ -174,23 +274,33 @@ def test_live_minute_bars_and_reconcile(clock, make_engine):
     eng = make_engine(today_fails=True)
     asyncio.run(eng._build())
     eng.feed_state = "live"
-    eng._on_feed(tick("22300CE", 120.5, atp=118.0))
-    eng._on_feed(tick("22300PE", 60.25, atp=61.5))
-
-    minute = datetime(2026, 10, 12, 10, 0, tzinfo=IST)
-    eng._close_minute(minute)
+    # First sight of each leg sets its volume baseline (the day so far).
+    eng._on_feed(tick("22300CE", 118.0, volume=50_000))
+    eng._on_feed(tick("22300PE", 62.0, volume=40_000))
+    # During 10:00 the legs trade 300 + 100 more.
+    eng._on_feed(tick("22300CE", 120.5, volume=50_300))
+    eng._on_feed(tick("22300PE", 60.25, volume=40_100))
     atm = eng.charts[1]
-    assert atm.series()[-1] == (ist_ts(10, 0), 180.75, 179.5)
-    assert eng._live_json()["vwaps"]["atm"] == 179.5
-    eng._close_minute(minute)  # the same minute never closes twice
+    assert eng._live_json()["volumes"]["atm"] == 400  # traded so far in the forming minute
+
+    eng._close_minute(datetime(2026, 10, 12, 10, 0, tzinfo=IST))
+    assert atm.series()[-1] == (ist_ts(10, 0), 180.75, 400)
+    assert eng._live_json()["volumes"]["atm"] == 0  # the next minute starts from zero
+    eng._close_minute(datetime(2026, 10, 12, 10, 0, tzinfo=IST))  # never closes twice
     assert len(atm.live) == 1
+
+    # 10:01 trades 200 + 200 more.
+    eng._on_feed(tick("22300CE", 130.5, volume=50_500))
+    eng._on_feed(tick("22300PE", 60.25, volume=40_300))
+    eng._close_minute(datetime(2026, 10, 12, 10, 1, tzinfo=IST))
+    assert atm.series()[-1] == (ist_ts(10, 1), 190.75, 400)
 
     # Official candles for today arrive and cover the live bar's minute.
     eng.gw.today_fails = False
     eng.gw.today_minutes = 50  # 09:15 .. 10:04
     asyncio.run(eng._reconcile())
     assert atm.live == []
-    assert atm.series()[-1][0] == ist_ts(10, 4)
+    assert atm.series()[-1] == (ist_ts(10, 4), 154.9, 200)  # official candle and volume
 
 
 def test_minute_close_needs_live_feed_and_session(clock, make_engine):
