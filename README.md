@@ -35,9 +35,9 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - **History window:** 1 to 15 trading sessions.
 - **Live updates:** after a TOTP login on the page, prices stream in and a new 1-minute bar closes every minute; boxes from the minute still forming are drawn faded.
 - **VWAP and SMA 10:** the straddle's intraday VWAP (yellow) and a 10-column simple moving average (light black; soft grey in dark mode), each switchable on or off, also shown in each panel header and on the price axis.
-- **Signals:** double top buy and double bottom sell are marked on the charts, with a toast, a panel flash, a chime and (when the tab is in the background) a system notification for each new one.
+- **Signals:** double top buy and double bottom sell are marked on the charts, with a toast, a panel flash, a chime and (when the tab is in the background) a system notification for each new one; a double bottom sell alerts only when the straddle is below its VWAP.
 - **Comfortable charts:** hover any box for its price and the time it printed, zoom in and out, scroll through history, light and dark themes.
-- **Simulator:** replay past sessions minute by minute at 1X, 10X, 50X, 100X or 200X, with the same charts, overlays and signals (see [Simulator](#simulator)).
+- **Simulator:** replay past sessions minute by minute at 1X, 10X, 50X, 100X or 200X, with the same charts, overlays and signals, and practise selling the straddles with live P&L (see [Simulator](#simulator)).
 
 ## How it works
 
@@ -194,6 +194,8 @@ Inside each panel:
 ## Alerts
 
 Alerts fire only when a closed 1-minute bar confirms a new double top buy or double bottom sell.
+A double bottom sell alerts only when the straddle is below its VWAP at that moment (the confirming minute's close against the VWAP then); it is still marked on the chart either way, and its alert says where VWAP was.
+A double top buy always alerts.
 They never fire for boxes still forming, and reloading the page does not replay old ones.
 
 Each alert gives you:
@@ -285,9 +287,25 @@ Changing speed mid-minute keeps the progress already made towards the next minut
 - **Movement within each minute:** the history API serves 1-minute candles, so each minute plays along its candle's likely path in four steps: open, the two extremes, then the close (a rising candle is taken to dip first, a falling one to rally first).
   The straddle prices, the CE and PE prices, the forming boxes (drawn faded, as on the live page), VWAP and the spot all move during the minute, and the minute's bar is completed at its close.
   For the straddle, the CE and PE paths are added step by step, which approximates the straddle's true path within the minute.
-- **Signals and alerts:** double top buy and double bottom sell are marked on the charts and raise a toast, a panel flash and a chime, labelled "(simulation)".
+- **Signals and alerts:** double top buy and double bottom sell are marked on the charts and raise a toast, a panel flash and a chime, labelled "(simulation)"; as on the live page, a double bottom sell alerts only when the straddle is below its VWAP.
   They fire only while playing; dragging along the timeline rebuilds the charts silently, so jumping around never replays old alerts.
   Toasts close themselves after 12 seconds (hover to keep one open), and simulated alerts are never written to the live page's alert log.
+
+### Simulated trades
+
+Each chart has a trade bar at the bottom for practising a short straddle (selling the CE and PE together) while the replay runs.
+
+| Button | What it does |
+| --- | --- |
+| **Sell 10 lots** | Sells the straddle at the price on screen, including the minute still forming: 650 qty for NIFTY (65 per lot) or 200 qty for SENSEX (20 per lot), using the lot size from the exchange's contract list. One trade at a time per chart, so Sell is hidden while a trade is open. |
+| **Exit 50%** | Buys back half of the open lots, rounded down to whole lots (10, 5, 3, 2, 1); disabled when only 1 lot is left. |
+| **Exit Full** | Buys back all open lots and closes the trade; Sell appears again. |
+
+- **P&L** updates live in rupees and points: points = entry price - current price (a short straddle gains when the straddle falls), rupees = points x quantity.
+  After a partial exit the P&L includes the booked part and the bar shows the lots still open; after a full exit it shows the closed trade's result, plus the total when a chart has been traded more than once.
+  Brokerage, taxes and slippage are ignored.
+- Buttons work while paused too, at the price on screen.
+- Going back along the timeline clears all simulated trades, since a trade cannot exist before it was opened; moving forward keeps them, and loading a new run starts afresh.
 
 ### Which dates can be replayed
 
@@ -323,7 +341,7 @@ node --test tests/*.test.mjs                   # Point & Figure engine and simul
 | `pnf/static/app.js` | Page wiring: controls, server messages, panel headers. |
 | `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits) and `POST /api/simulate` (builds a run); serves the live app's static files read-only. |
 | `pnf_sim/replay.py` | Builds a simulator run: date checks, expiries offered, strikes from the start day's open, straddle series with each minute's price path, previous closes for the spot. |
-| `pnf_sim/static/` | The simulator page (`simulator.html`, `simulator.js`, `sim.css`) and its replay clock (`player.js`). |
+| `pnf_sim/static/` | The simulator page (`simulator.html`, `simulator.js`, `sim.css`), its replay clock (`player.js`) and its simulated trades (`trades.js`). |
 | `tests/` | Python tests (the live engine against a fake gateway, and the simulator's run building) and JavaScript tests (the P&F engine and the simulator's replay clock). |
 
 ### Testing the live path outside market hours

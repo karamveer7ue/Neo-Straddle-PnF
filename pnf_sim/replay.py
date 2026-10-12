@@ -124,6 +124,7 @@ async def build_run(gw: NeoGateway, req: SimRequest) -> dict:
     atm = req.atm or atm_auto
     strikes = {key: atm + off for key, off in u.chart_offsets.items()}
     contracts = await gw.option_contracts(u, req.expiry, list(strikes.values()))
+    lot_size = await contract_lot_size(gw, u, req.expiry)
 
     charts = []
     for key, off in u.chart_offsets.items():
@@ -158,6 +159,7 @@ async def build_run(gw: NeoGateway, req: SimRequest) -> dict:
         "charts": charts,
         "spot": [[ts, c[3], candle_path(c)] for ts, c in sorted(index.items())],
         "pathSteps": PATH_STEPS,
+        "lotSize": lot_size,  # units per lot, for the simulated trades' rupee P&L
         "spotPrevCloses": {d.isoformat(): v for d, v in prev_closes.items()},  # for the spot's change
     }
 
@@ -182,6 +184,29 @@ async def _previous_closes(gw: NeoGateway, u: Underlying, start: date, index: di
     for prev, day in pairwise(sessions):
         out[day] = index[max(ts for ts in index if session_date(ts) == prev)][3]
     return out
+
+
+# Used only if the contract list cannot be read; lot sizes change over time, so the
+# exchange's own figure is preferred.
+FALLBACK_LOT_SIZES = {"NIFTY": 65, "SENSEX": 20}
+
+
+async def contract_lot_size(gw: NeoGateway, u: Underlying, expiry: date) -> int:
+    """Units per lot for the underlying's options of this expiry, from the scrip master."""
+    try:
+        rows = await gw._call_with_retry(  # the gateway's paced call; option_contracts drops lot sizes
+            gw.client.search_scrip,
+            exchange_segment=u.fo_segment,
+            symbol=u.key.lower(),
+            expiry=expiry.strftime("%d%b%Y"),
+            option_type="CE",
+        )
+        for row in rows if isinstance(rows, list) else []:
+            if str(row.get("pSymbolName", "")).strip().upper() == u.key and int(row.get("lLotSize") or 0) > 0:
+                return int(row["lLotSize"])
+    except Exception as exc:  # display-only: fall back rather than fail the run
+        log.warning("Lot size lookup failed for %s %s: %s", u.key, expiry, str(exc)[:200])
+    return FALLBACK_LOT_SIZES[u.key]
 
 
 def default_dates(today: date) -> tuple[date, date]:

@@ -164,3 +164,14 @@ export function findSignals(columns) {
   }
   return signals;
 }
+
+/**
+ * Whether a newly confirmed signal should raise an alert. A double bottom
+ * sell alerts only when the straddle (`price`, the confirming close) is below
+ * its VWAP at that moment - unknown VWAP means no alert. A double top buy
+ * always alerts. Chart markers are drawn for every signal regardless.
+ */
+export function alertWanted(signal, price, vwap) {
+  if (signal.type !== 'sell') return true;
+  return vwap != null && price < vwap;
+}

@@ -6,7 +6,9 @@
 
 import { raiseAlert, setSoundEnabled, soundEnabled } from '/static/alerts.js';
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from '/static/chart.js';
+import { alertWanted } from '/static/pnf.js';
 import { Player, SPEEDS } from './player.js';
+import { LOTS_PER_SELL, ShortStraddleTrade } from './trades.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -254,7 +256,9 @@ function buildPanels(charts) {
     const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip });
     panel.setCell(state.cellOverride);
     panel.setOverlays(state.overlays);
-    state.panels.set(def.key, { root, panel, def });
+    const entry = { root, panel, def, trade: null, closed: [] };
+    state.panels.set(def.key, entry);
+    wireTrades(entry);
   }
 }
 
@@ -312,7 +316,16 @@ function showFormingMinute() {
 
 function seekTo(i) {
   if (!state.player) return;
+  const back = i < state.player.index;
   state.player.seek(i);
+  // A trade cannot exist before it was opened: going back in time clears them.
+  if (back && [...state.panels.values()].some((e) => e.trade || e.closed.length)) {
+    for (const entry of state.panels.values()) {
+      entry.trade = null;
+      entry.closed = [];
+    }
+    showBanner('Simulated trades were cleared because the replay went back in time.', 'warn');
+  }
   reveal(state.player.index, false);
 }
 
@@ -357,6 +370,8 @@ function renderPanelHead(entry) {
     chip.textContent = `${s.type === 'buy' ? '▲ DT buy' : '▼ DB sell'} ${fmtTime(s.ts)}`;
     chip.title = `Last signal: ${SIGNAL_NAMES[s.type]}, ${fmtDay(s.ts)} ${fmtTime(s.ts)}`;
   }
+
+  renderTrade(entry);
 
   const msg = q('.plot-msg');
   let text = def.error ?? '';
@@ -427,12 +442,17 @@ function alertSignals(entry, signals) {
     if (state.alerted.has(key)) continue;
     state.alerted.add(key);
     const pnf = entry.panel.pnf;
+    // A double bottom sell alerts only below VWAP (its marker is drawn regardless).
+    const close = entry.panel.series[entry.panel.series.length - 1]?.[1];
+    const vwap = pnf.vwap[s.col];
+    if (!alertWanted(s, close, vwap)) continue;
     raiseAlert({
       type: s.type,
       title: `${SIGNAL_NAMES[s.type]} · ${offsetLabel(entry.def.offset)} (simulation)`,
       detail: `${state.run.underlying.key} ${fmtStrike(entry.def.strike)} straddle broke ` +
         `${s.type === 'buy' ? 'above' : 'below'} ${fmtPrice(pnf.price(s.level))} → ` +
-        `${fmtPrice(pnf.price(s.row))} at ${fmtDay(s.ts)} ${fmtTime(s.ts)}`,
+        `${fmtPrice(pnf.price(s.row))} at ${fmtDay(s.ts)} ${fmtTime(s.ts)}` +
+        (s.type === 'sell' ? ` · below VWAP ${fmtPrice(vwap)}` : ''),
     });
     flashPanel(entry.root, s.type);
   }
@@ -444,6 +464,93 @@ function flashPanel(root, type) {
   root.classList.add(`flash-${type}`);
   clearTimeout(root.flashTimer);
   root.flashTimer = setTimeout(() => root.classList.remove(`flash-${type}`), FLASH_MS);
+}
+
+// ---------------- Simulated trades ----------------
+
+const fmtRupees = (v) =>
+  `${v >= 0 ? '+' : '\u2212'}\u20b9${Math.abs(Math.round(v)).toLocaleString('en-IN')}`;
+
+/** The price and minute on screen for this chart (the forming minute included). */
+function priceNow(entry) {
+  const { panel } = entry;
+  if (panel.live) return { price: panel.live.price, ts: panel.live.ts };
+  const last = panel.series[panel.series.length - 1];
+  return last ? { price: last[1], ts: last[0] } : null;
+}
+
+function wireTrades(entry) {
+  const q = (sel) => entry.root.querySelector(sel);
+  q('.trade-sell').textContent = `Sell ${LOTS_PER_SELL} lots`;
+  q('.trade-sell').addEventListener('click', () => {
+    const now = priceNow(entry);
+    if (!now || entry.trade) return;
+    entry.trade = new ShortStraddleTrade(state.run.lotSize, now.price, now.ts);
+    renderTrade(entry);
+  });
+  q('.trade-half').addEventListener('click', () => {
+    const now = priceNow(entry);
+    if (!now || !entry.trade) return;
+    entry.trade.exitHalf(now.price, now.ts);
+    renderTrade(entry);
+  });
+  q('.trade-full').addEventListener('click', () => {
+    const now = priceNow(entry);
+    if (!now || !entry.trade) return;
+    entry.trade.exitFull(now.price, now.ts);
+    entry.closed.push(entry.trade);
+    entry.trade = null;
+    renderTrade(entry);
+  });
+}
+
+function renderTrade(entry) {
+  const q = (sel) => entry.root.querySelector(sel);
+  const now = priceNow(entry);
+  const pnlEl = q('.trade-pnl');
+  const detail = q('.trade-detail');
+  const sell = q('.trade-sell');
+  const half = q('.trade-half');
+  const full = q('.trade-full');
+  const t = entry.trade;
+  const qty = (lots) => `${lots} lot${lots > 1 ? 's' : ''} (${(lots * state.run.lotSize).toLocaleString('en-IN')} qty)`;
+
+  sell.hidden = !!t;
+  half.hidden = !t;
+  full.hidden = !t;
+  sell.disabled = !now || !!entry.def.error;
+  const showPnl = (rupees, points) => {
+    pnlEl.className = `trade-pnl ${rupees >= 0 ? 'up' : 'down'}`;
+    const pts = document.createElement('span');
+    pts.className = 'pts';
+    pts.textContent = `${points >= 0 ? '+' : '\u2212'}${Math.abs(points).toFixed(2)} pts`;
+    pnlEl.replaceChildren(fmtRupees(rupees), pts);
+  };
+
+  if (t && now) {
+    const p = t.pnl(now.price);
+    showPnl(p.total, t.totalPoints(now.price));
+    const parts = [`Short ${qty(t.openLots)} @ ${fmtPrice(t.entry)} since ${fmtTime(t.ts)}`];
+    if (t.exits.length) parts.push(`booked ${fmtRupees(p.booked)}`);
+    detail.textContent = parts.join(' \u00b7 ');
+    detail.title = detail.textContent; // shown in full on hover when the bar is narrow
+    half.disabled = t.halfLots < 1;
+    half.title = t.halfLots ? `Buy back ${qty(t.halfLots)} at the price on screen` : 'Only 1 lot is open; it cannot be halved';
+    full.title = `Buy back all ${qty(t.openLots)} at the price on screen`;
+    return;
+  }
+
+  const last = entry.closed[entry.closed.length - 1];
+  if (last) {
+    const total = entry.closed.reduce((s, x) => s + x.booked, 0);
+    showPnl(last.booked, last.totalPoints(0));
+    detail.textContent = `Closed: sold ${fmtPrice(last.entry)} at ${fmtTime(last.ts)}` +
+      (entry.closed.length > 1 ? ` \u00b7 ${entry.closed.length} trades, total ${fmtRupees(total)}` : '');
+    detail.title = detail.textContent;
+  } else {
+    pnlEl.replaceChildren();
+    detail.textContent = now ? `No trade \u00b7 straddle ${fmtPrice(now.price)}` : 'No trade';
+  }
 }
 
 // ---------------- Tooltip ----------------

@@ -87,9 +87,20 @@ def test_candle_path_and_flat_path_for_a_leg_that_did_not_trade():
 class FakeGateway:
     """Index and option candles for 8-9 Oct; options start trading on `options_from`."""
 
-    def __init__(self, options_from=date(2026, 10, 8)):
+    def __init__(self, options_from=date(2026, 10, 8), lot_size=75):
         self.options_from = options_from
+        self.lot_size = lot_size
         self.calls = []
+        self.client = self  # stands in for the SDK client's search_scrip
+
+    def search_scrip(self, **kwargs):
+        if self.lot_size is None:
+            raise RuntimeError("scrip master unavailable")
+        name = kwargs["symbol"].upper()
+        return [{"pSymbolName": name, "lLotSize": self.lot_size}]
+
+    async def _call_with_retry(self, fn, **kwargs):
+        return fn(**kwargs)
 
     async def option_contracts(self, u, expiry, strikes):
         return {
@@ -130,6 +141,7 @@ def test_build_run_fixes_strikes_from_the_start_days_open():
     assert len(run["charts"][1]["series"]) == 6  # 3 minutes on each day
     # Previous closes: 8 Oct from the request before the run (7 Oct's last close), 9 Oct from 8 Oct.
     assert run["spotPrevCloses"] == {"2026-10-08": 22402.0, "2026-10-09": 22316.95}
+    assert run["lotSize"] == 75  # from the contract list
     before_run = [c for c in gw.calls if c[2] == date(2026, 10, 7)]
     assert before_run and before_run[0][1] == date(2026, 9, 28)
 
@@ -156,3 +168,11 @@ def test_no_sessions_in_the_range_is_refused():
     )
     with pytest.raises(SimError, match="No NIFTY trading sessions"):
         asyncio.run(build_run(FakeGateway(), req))
+
+
+def test_lot_size_falls_back_when_the_contract_list_fails():
+    req = SimRequest(
+        UNDERLYINGS["SENSEX"], date(2026, 10, 15), date(2026, 10, 9), date(2026, 10, 9), atm=None
+    )
+    run = asyncio.run(build_run(FakeGateway(lot_size=None), req))
+    assert run["lotSize"] == 20

@@ -97,3 +97,60 @@
 /* Keep "+12.30 (+1.25%) vs open" on one line; the CE/PE/VWAP/SMA line gives way with an ellipsis. */
 .panel-head .ph-main { flex: 1; min-width: 0; }
 .panel-head .ph-chg { white-space: nowrap; }
+
+/* ---------------- Simulated trades (bottom of each chart) ---------------- */
+
+.trade-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.trade-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.trade-pnl {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.trade-pnl:empty { display: none; }
+.trade-pnl.up { color: var(--up); }
+.trade-pnl.down { color: var(--down); }
+.trade-pnl .pts { margin-left: 6px; font-size: 12px; font-weight: 500; }
+
+.trade-detail {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trade-actions { display: flex; gap: 6px; flex: none; }
+.trade-actions .btn { height: 30px; font-weight: 600; }
+
+.trade-sell {
+  background: var(--o);
+  border-color: var(--o);
+  color: #fff;
+}
+
+.trade-sell:hover { filter: brightness(1.08); border-color: var(--o); }
+.trade-full { color: var(--text-1); }
+
+
+/* Alert toasts stack above the trade bars, so they never hide a P&L or the exit buttons. */
+.toasts { bottom: 76px; }

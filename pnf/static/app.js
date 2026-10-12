@@ -1,5 +1,6 @@
 import { raiseAlert, requestNotifications, setSoundEnabled, soundEnabled } from './alerts.js';
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from './chart.js';
+import { alertWanted } from './pnf.js';
 
 const MAX_DAYS = 15;
 
@@ -200,6 +201,10 @@ function alertSignals(entry, signals) {
     const key = `${entry.def.ce?.key}:${s.type}:${s.ts}:${s.row}`;
     if (state.alerted.has(key)) continue;
     state.alerted.add(key);
+    // A double bottom sell alerts only below VWAP (its marker is drawn regardless).
+    const close = entry.panel.series[entry.panel.series.length - 1]?.[1];
+    const vwap = entry.panel.pnf.vwap[s.col];
+    if (!alertWanted(s, close, vwap)) continue;
     const price = entry.panel.pnf.price(s.row);
     const level = entry.panel.pnf.price(s.level);
     // Record it in the shared log (the server ignores duplicates from other tabs).
@@ -218,7 +223,8 @@ function alertSignals(entry, signals) {
       type: s.type,
       title: `${SIGNAL_NAMES[s.type]} \u00b7 ${offsetLabel(entry.def.offset)}`,
       detail: `${builtKey()} ${fmtStrike(entry.def.strike)} straddle broke ${s.type === 'buy' ? 'above' : 'below'} ` +
-        `${fmtPrice(entry.panel.pnf.price(s.level))} \u2192 ${fmtPrice(price)} at ${fmtTime(s.ts)}`,
+        `${fmtPrice(entry.panel.pnf.price(s.level))} \u2192 ${fmtPrice(price)} at ${fmtTime(s.ts)}` +
+        (s.type === 'sell' ? ` \u00b7 below VWAP ${fmtPrice(vwap)}` : ''),
     });
     flashPanel(entry.root, s.type);
   }

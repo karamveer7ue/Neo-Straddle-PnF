@@ -113,3 +113,39 @@ test('seek jumps without stepping through the minutes in between', () => {
   assert.equal(player.index, 99);
   assert.equal(player.playing, false);
 });
+
+// ---------------- Simulated trades ----------------
+
+test('a short straddle gains as the straddle falls, in points and rupees', async () => {
+  const { ShortStraddleTrade, LOTS_PER_SELL } = await import('../pnf_sim/static/trades.js');
+  assert.equal(LOTS_PER_SELL, 10);
+  const t = new ShortStraddleTrade(65, 300, 1); // 10 lots x 65 = 650 qty
+  assert.deepEqual(t.pnl(285), { openPts: 15, openRs: 15 * 650, booked: 0, total: 9750 });
+  assert.equal(t.pnl(310).total, -6500); // the straddle rose: a loss
+});
+
+test('exit 50% closes half the open lots, rounded down, and books their P&L', async () => {
+  const { ShortStraddleTrade } = await import('../pnf_sim/static/trades.js');
+  const t = new ShortStraddleTrade(65, 300, 1);
+  assert.equal(t.exitHalf(290, 2), 5); // 10 -> 5 open, booked 10 pts x 5 lots
+  assert.equal(t.booked, 10 * 5 * 65);
+  assert.equal(t.exitHalf(295, 3), 2); // 5 -> 3 open
+  assert.equal(t.exitHalf(295, 4), 1); // 3 -> 2
+  assert.equal(t.exitHalf(295, 5), 1); // 2 -> 1
+  assert.equal(t.halfLots, 0); // 1 lot cannot be halved
+  assert.equal(t.exitHalf(295, 6), 0);
+  assert.equal(t.openLots, 1);
+  const p = t.pnl(280);
+  assert.equal(p.openRs, 20 * 1 * 65);
+  assert.equal(p.total, p.booked + p.openRs);
+});
+
+test('exit full closes the trade; P&L is then all booked', async () => {
+  const { ShortStraddleTrade } = await import('../pnf_sim/static/trades.js');
+  const t = new ShortStraddleTrade(20, 1000, 1); // SENSEX: 10 lots x 20
+  t.exitHalf(990, 2); // 5 lots, +10 pts
+  t.exitFull(1010, 3); // 5 lots, -10 pts
+  assert.equal(t.isOpen, false);
+  assert.deepEqual(t.pnl(500), { openPts: 0, openRs: 0, booked: 10 * 5 * 20 - 10 * 5 * 20, total: 0 });
+  assert.equal(t.totalPoints(500), 0);
+});
