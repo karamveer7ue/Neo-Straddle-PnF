@@ -6,6 +6,7 @@ the gateway, the series helpers, and the P&F engine and chart renderer.
 Only market data is needed, so it never logs in (no TOTP).
 """
 
+import asyncio
 import logging
 import os
 from collections import OrderedDict
@@ -55,6 +56,7 @@ def make_gateway() -> NeoGateway:
 async def lifespan(app: FastAPI):
     app.state.gw = make_gateway()
     app.state.runs = OrderedDict()
+    app.state.building = {}  # key -> asyncio.Task, so identical requests share one build
     yield
 
 
@@ -103,24 +105,56 @@ async def options(underlying: Literal["NIFTY", "SENSEX"] = "NIFTY"):
 async def simulate(body: SimulateBody):
     u = UNDERLYINGS[body.underlying]
     today = today_ist()
+    key = (body.underlying, body.expiry, body.start, body.end, body.atm, today)
+    runs: OrderedDict = app.state.runs
     try:
-        validate_dates(body.start, body.end, today)
-        if body.atm is not None and body.atm % u.strike_step:
-            raise SimError(f"{u.key} ATM must be a multiple of {u.strike_step}.")
-        listed = offered_expiries(await app.state.gw.expiries(u), today)
-        if body.expiry not in listed:
-            raise SimError("Pick one of the listed expiries (expired contracts cannot be fetched).")
-        key = (body.underlying, body.expiry, body.start, body.end, body.atm, today)
-        runs: OrderedDict = app.state.runs
-        if key not in runs:
-            req = SimRequest(underlying=u, expiry=body.expiry, start=body.start, end=body.end, atm=body.atm)
-            runs[key] = await build_run(app.state.gw, req)
-            while len(runs) > RUN_CACHE_SIZE:
-                runs.popitem(last=False)
-        runs.move_to_end(key)
-        return runs[key]
+        if key in runs:  # validated when it was built (the key includes today)
+            runs.move_to_end(key)
+            return runs[key]
+        task = app.state.building.get(key)
+        if task is None:
+            validate_dates(body.start, body.end, today)
+            if body.atm is not None and body.atm % u.strike_step:
+                raise SimError(f"{u.key} ATM must be a multiple of {u.strike_step}.")
+            listed = offered_expiries(await app.state.gw.expiries(u), today)
+            if body.expiry not in listed:
+                raise SimError("Pick one of the listed expiries (expired contracts cannot be fetched).")
+            task = app.state.building.get(key)  # another request may have started it meanwhile
+            if task is None:
+                req = SimRequest(
+                    underlying=u, expiry=body.expiry, start=body.start, end=body.end, atm=body.atm
+                )
+                task = start_build(key, req)
+        # shield: one caller going away must not cancel a build others (or the cache) want
+        return await asyncio.shield(task)
     except SimError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except NeoError as exc:
-        log.exception("Simulation data failed")
         raise HTTPException(status_code=502, detail=f"The market-data API failed: {exc}"[:400]) from exc
+
+
+def start_build(key: tuple, req: SimRequest) -> asyncio.Task:
+    """Build a run once for everyone asking, and cache it even if they all went away."""
+    building: dict = app.state.building
+
+    async def build():
+        try:
+            run = await build_run(app.state.gw, req)
+        except NeoError:
+            log.exception("Simulation data failed")  # once, however many requests wait on it
+            raise
+        except SimError:
+            raise
+        except Exception as exc:  # e.g. an odd API row: a readable error, not a bare 500
+            log.exception("Simulation build failed")
+            raise NeoError(f"unexpected reply ({type(exc).__name__}: {exc})") from exc
+        finally:
+            building.pop(key, None)
+        runs: OrderedDict = app.state.runs
+        runs[key] = run
+        while len(runs) > RUN_CACHE_SIZE:
+            runs.popitem(last=False)
+        return run
+
+    task = building[key] = asyncio.create_task(build())
+    return task

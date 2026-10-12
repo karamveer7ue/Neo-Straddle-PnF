@@ -416,3 +416,261 @@ def test_charts_still_build_when_the_future_is_unavailable(clock, make_engine):
     asyncio.run(eng._build())
     assert eng.phase == "ready"
     assert eng.snapshot()["future"] is None
+
+
+# ---------------- Regressions from the code review ----------------
+
+
+def test_failed_rebuild_keeps_the_generation_so_the_old_charts_stay_live(clock, make_engine):
+    eng = make_engine()
+    asyncio.run(eng._build())
+    gen = eng.generation
+    eng.feed_state = "live"
+    eng._on_feed(tick("22300CE", 120.0, volume=10))
+    eng._on_feed(tick("22300PE", 60.0, volume=10))
+
+    async def failing_expiries(u):
+        raise NeoError("429 storm")
+
+    eng.gw.expiries = failing_expiries
+    asyncio.run(eng._build())
+    assert eng.phase == "error"
+    assert eng.generation == gen  # the browser's generation still matches: nothing is dropped
+    queue = eng.subscribe()
+    queue.get_nowait()  # snapshot
+    eng._close_minute(datetime(2026, 10, 12, 10, 0, tzinfo=IST))
+    bars = [m for m in (queue.get_nowait() for _ in range(queue.qsize())) if m["type"] == "bar"]
+    assert bars and all(m["generation"] == gen for m in bars)
+
+
+def test_live_bars_survive_a_rebuild_of_the_same_straddles(clock, make_engine):
+    eng = make_engine(today_fails=True)  # same-day history refused: live bars are today's only data
+    asyncio.run(eng._build())
+    eng.feed_state = "live"
+    eng._on_feed(tick("22300CE", 120.0, volume=10))
+    eng._on_feed(tick("22300PE", 60.0, volume=10))
+    eng._close_minute(datetime(2026, 10, 12, 10, 0, tzinfo=IST))
+    asyncio.run(eng._build())  # e.g. the day count changed
+    assert eng.charts[1].series()[-1][:2] == (ist_ts(10, 0), 180.0)
+
+
+def test_volume_baseline_resets_on_subscribe_and_after_the_overnight_reset(clock, make_engine):
+    async def scenario(eng):
+        await eng._build()
+        eng._volume_mark["nse_fo|22300CE"] = 5_000  # left over from before a drop
+        eng.day_volume["nse_fo|22300CE"] = 5_000
+        eng.gw.logged_in = True
+        task = asyncio.create_task(eng._run_feed())
+        while len(eng.gw.subscriptions) < 2:
+            await asyncio.sleep(0.01)
+        task.cancel()
+
+    eng = make_engine()
+    asyncio.run(scenario(eng))
+    assert "nse_fo|22300CE" not in eng._volume_mark  # the next packet sets a fresh baseline
+    # The exchange's day volume restarts at zero: a smaller value is today's volume so far.
+    eng._volume_mark.update({"nse_fo|22300CE": 900_000, "nse_fo|22300PE": 0})
+    eng.day_volume.update({"nse_fo|22300CE": 1_200, "nse_fo|22300PE": 300})
+    assert eng._minute_volume(eng.charts[1]) == 1_500
+
+
+def test_an_empty_day_before_0930_is_provisional_and_rechecked_at_0931(clock, make_engine):
+    clock["t"] = datetime(2026, 10, 12, 9, 16, 5, tzinfo=IST)
+    eng = make_engine(today_minutes=0)  # nothing traded yet, or a holiday: cannot tell yet
+    asyncio.run(eng._build())
+    assert TODAY in eng.window_dates
+    assert eng.built_for == (TODAY, False)
+    assert eng._recheck_at == datetime(2026, 10, 12, 9, 31, tzinfo=IST)
+    clock["t"] = datetime(2026, 10, 12, 9, 31, 10, tzinfo=IST)
+    asyncio.run(eng._build())  # the 09:31 recheck: still empty, so a holiday
+    assert TODAY not in eng.window_dates and eng.built_for == (TODAY, True)
+
+
+def test_the_0916_rollover_on_a_trading_day_is_final(clock, make_engine):
+    """At 09:16 the settle filter hides the 09:15 candle; the build must still see
+    that today traded, or every rollover is provisional and rechecked at 09:31."""
+    clock["t"] = datetime(2026, 10, 12, 9, 16, 5, tzinfo=IST)
+    eng = make_engine(today_minutes=2)  # 09:15, plus 09:16 in progress
+    asyncio.run(eng._build())
+    assert TODAY in eng.window_dates
+    assert eng.built_for == (TODAY, True) and eng._recheck_at is None
+
+
+def test_a_provisional_build_before_0916_still_takes_the_0916_rollover(clock, make_engine):
+    clock["t"] = datetime(2026, 10, 12, 9, 15, 30, tzinfo=IST)
+    eng = make_engine(today_minutes=0)
+    asyncio.run(eng._build())
+    assert eng._recheck_at == datetime(2026, 10, 12, 9, 16, tzinfo=IST)
+
+
+def test_live_bars_of_a_day_found_to_be_a_holiday_are_dropped(clock, make_engine):
+    clock["t"] = datetime(2026, 10, 12, 9, 16, 5, tzinfo=IST)
+    eng = make_engine(today_minutes=0)
+    asyncio.run(eng._build())
+    eng.feed_state = "live"
+    for m in range(16, 21):  # the feed stays up on a holiday: flat bars from the last LTPs
+        eng._close_minute(datetime(2026, 10, 12, 9, m, tzinfo=IST))
+    assert eng.charts[1].series()[-1][0] == ist_ts(9, 20)
+    clock["t"] = datetime(2026, 10, 12, 9, 31, 10, tzinfo=IST)
+    asyncio.run(eng._build())  # the 09:31 recheck: a holiday
+    assert TODAY not in eng.window_dates
+    assert all(b[0] < ist_ts(9, 15) for b in eng.charts[1].series())
+
+
+def test_the_0915_bar_survives_the_overnight_rollover(clock, make_engine):
+    friday = date(2026, 10, 9)
+    clock["t"] = datetime(2026, 10, 9, 15, 40, tzinfo=IST)
+    eng = make_engine(today_fails=True)  # Monday's same-day history will be refused
+    asyncio.run(eng._build())
+    assert eng.window_dates[-1] == friday
+    eng.feed_state = "live"
+    eng._on_feed(tick("22300CE", 125.0, volume=0))
+    eng._on_feed(tick("22300PE", 65.0, volume=0))
+    eng._on_feed(tick("22300CE", 126.0, volume=500))
+    clock["t"] = datetime(2026, 10, 12, 9, 16, 0, 100000, tzinfo=IST)
+    eng._close_minute(datetime(2026, 10, 12, 9, 15, tzinfo=IST))  # before the 09:16 rebuild
+    asyncio.run(eng._build())
+    assert eng.charts[1].series()[-1] == (ist_ts(9, 15), 191.0, 500)
+
+
+def test_a_holiday_takes_no_live_bars_once_decided(clock, make_engine):
+    clock["t"] = datetime(2026, 10, 12, 9, 40, tzinfo=IST)
+    eng = make_engine(today_minutes=0)
+    asyncio.run(eng._build())
+    assert eng.built_for == (TODAY, True) and TODAY not in eng.window_dates
+    eng.feed_state = "live"
+    before = eng.charts[1].series()
+    eng._close_minute(datetime(2026, 10, 12, 9, 39, tzinfo=IST))
+    assert eng.charts[1].series() == before
+
+
+def test_a_refresh_with_less_of_today_never_erases_official_bars(clock, make_engine):
+    eng = make_engine()
+    asyncio.run(eng._build())
+    before = eng.charts[1].series()
+    eng.gw.today_minutes = 0  # an empty "success" reply
+    asyncio.run(eng._reconcile())
+    assert eng.charts[1].series() == before
+
+
+def test_past_days_cached_under_an_earlier_today_are_dropped(clock, make_engine):
+    eng = make_engine()
+    eng._past_cache[("nse_fo|X", date(2026, 9, 1), date(2026, 10, 9))] = [(1, 1.0, 1)]
+    asyncio.run(eng._build())
+    assert all(k[2] == TODAY for k in eng._past_cache)
+
+
+def make_test_gateway(monkeypatch):
+    from pnf import neo as neo_mod
+
+    monkeypatch.setattr(neo_mod, "MIN_CALL_GAP", 0)
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(neo_mod.asyncio, "sleep", no_sleep)
+    return neo_mod.NeoGateway("key", "", "", "")
+
+
+def test_gateway_retries_network_errors_then_gives_up_with_a_neo_error(monkeypatch):
+    from neo_api_client.exceptions import ApiException
+
+    gw = make_test_gateway(monkeypatch)
+    calls = []
+
+    def flaky(**kwargs):
+        calls.append(1)
+        if len(calls) < 3:  # how the SDK reports a timeout or a dropped connection
+            raise ApiException(status=0, reason="Request timeout after 30 seconds")
+        return {"ok": True}
+
+    assert asyncio.run(gw._call_with_retry(flaky)) == {"ok": True}
+    assert len(calls) == 3
+
+    def always_down(**kwargs):
+        raise ApiException(status=0, reason="Unable to connect to server")
+
+    with pytest.raises(NeoError, match="still failing"):
+        asyncio.run(gw._call_with_retry(always_down))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"Error": "Unexpected response format", "StatusCode": 503},  # an HTML error page
+        {"code": 429},
+        "returned",  # scrip search returns {"error": ApiException} instead of raising
+    ],
+)
+def test_gateway_retries_every_transient_reply_shape(monkeypatch, reply):
+    from neo_api_client.exceptions import ApiException
+
+    gw = make_test_gateway(monkeypatch)
+    if reply == "returned":
+        reply = {"error": ApiException(status=502, reason="Bad Gateway")}
+    calls = []
+
+    def flaky(**kwargs):
+        calls.append(1)
+        return reply if len(calls) < 2 else {"ok": True}
+
+    assert asyncio.run(gw._call_with_retry(flaky)) == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_gateway_does_not_retry_faults(monkeypatch):
+    from neo_api_client.exceptions import ApiException
+
+    gw = make_test_gateway(monkeypatch)
+    calls = []
+
+    def rejected(**kwargs):
+        calls.append(1)
+        raise ApiException(status=400, reason="Bad Request")
+
+    with pytest.raises(NeoError, match="Bad Request"):
+        asyncio.run(gw._call_with_retry(rejected))
+
+    def broken(**kwargs):
+        calls.append(1)
+        raise TypeError("a bug, not bad luck")
+
+    with pytest.raises(TypeError):
+        asyncio.run(gw._call_with_retry(broken))
+    assert len(calls) == 2
+
+
+def test_gateway_holds_the_lock_until_a_cancelled_call_finishes_even_if_cancelled_again(monkeypatch):
+    import threading
+
+    from pnf import neo as neo_mod
+
+    monkeypatch.setattr(neo_mod, "MIN_CALL_GAP", 0)
+    gw = neo_mod.NeoGateway("key", "", "", "")
+    release = threading.Event()
+    running = []
+
+    def slow(**kwargs):
+        running.append(1)
+        release.wait(5)
+        running.pop()
+        return {"ok": True}
+
+    def overlap_check(**kwargs):
+        return {"overlapped": bool(running)}
+
+    async def scenario():
+        first = asyncio.create_task(gw._call(slow))
+        while not running:
+            await asyncio.sleep(0.01)
+        first.cancel()
+        await asyncio.sleep(0.01)
+        first.cancel()  # a second cancel while it waits for the thread
+        second = asyncio.create_task(gw._call(overlap_check))
+        await asyncio.sleep(0.05)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        return await second
+
+    assert asyncio.run(scenario()) == {"overlapped": False}

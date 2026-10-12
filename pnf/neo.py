@@ -2,15 +2,18 @@
 
 All REST calls run in a worker thread, one at a time, with a minimum gap
 between them: the market-data endpoints answer bursts with 429s. Transient
-failures (429, 5xx) are retried with backoff; anything else raises.
+failures (429, 5xx, timeouts and network errors) are retried with backoff;
+anything else raises.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 from datetime import date, datetime
 
 from neo_api_client import NeoAPI
+from neo_api_client.exceptions import ApiException
 
 from .series import Underlying
 
@@ -28,16 +31,23 @@ class NeoError(RuntimeError):
 def error_code(response) -> int | None:
     """Error code (>=400) from a failure response, else None.
 
-    Seen shapes: {"code": 429, ...}, {"code": 503, ...} and
-    {"status": "ERROR", "fault": {"code": 422, ...}}.
+    Seen shapes: {"code": 429, ...}, {"code": 503, ...},
+    {"status": "ERROR", "fault": {"code": 422, ...}}, and from a non-JSON
+    reply (e.g. a gateway's HTML 503 page) {"Error": ..., "StatusCode": 503}.
     """
     if not isinstance(response, dict):
         return None
-    for holder in (response, response.get("fault")):
-        code = holder.get("code") if isinstance(holder, dict) else None
+    for holder, field in ((response, "code"), (response.get("fault"), "code"), (response, "StatusCode")):
+        code = holder.get(field) if isinstance(holder, dict) else None
         if isinstance(code, int) and code >= 400:
             return code
     return None
+
+
+def wrapped_exception(response) -> ApiException | None:
+    """The ApiException some SDK calls return as {"error": exc} instead of raising."""
+    found = response.get("error") if isinstance(response, dict) else None
+    return found if isinstance(found, ApiException) else None
 
 
 def describe(response) -> str:
@@ -57,9 +67,18 @@ def describe(response) -> str:
     return str(response) if response else ""
 
 
+def transient_status(status) -> bool:
+    """429, 5xx, and 0 - the SDK's status for timeouts and network errors."""
+    return isinstance(status, int) and (status in (0, 429) or 500 <= status < 600)
+
+
 def is_transient(response) -> bool:
-    code = error_code(response)
-    return code == 429 or (code is not None and 500 <= code < 600)
+    """A failure worth retrying: a raised or returned ApiException with a transient
+    status (or none: an unknown transport failure), or a reply with a 429/5xx code."""
+    exc = response if isinstance(response, ApiException) else wrapped_exception(response)
+    if exc is not None:
+        return exc.status is None or transient_status(exc.status)
+    return transient_status(error_code(response))
 
 
 def is_error(response) -> bool:
@@ -88,27 +107,43 @@ class NeoGateway:
             wait = self._last_call + MIN_CALL_GAP - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
+            call = asyncio.ensure_future(asyncio.to_thread(fn, **kwargs))
             try:
-                return await asyncio.to_thread(fn, **kwargs)
+                return await asyncio.shield(call)
+            except asyncio.CancelledError:
+                # The thread cannot be stopped: hold the lock until it finishes, so a
+                # cancelled build's request never overlaps the next one (429s). Further
+                # cancels while waiting must not cut that short either.
+                while not call.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.wait({call})
+                if not call.cancelled():
+                    call.exception()  # retrieved: the caller is gone, its result unwanted
+                raise
             finally:
                 self._last_call = time.monotonic()
 
     async def _call_with_retry(self, fn, **kwargs):
-        response = await self._call(fn, **kwargs)
-        for attempt in range(1, MAX_RETRIES + 1):
+        """Call with backoff on transient failures: 429s, 5xx replies, and the
+        ApiException the SDK raises for network trouble (timeouts, dropped
+        connections). Any other exception is a fault, not bad luck: no retry."""
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await self._call(fn, **kwargs)
+            except ApiException as exc:
+                if not is_transient(exc):
+                    raise NeoError(f"{fn.__name__} failed: {exc}") from exc
+                response = exc
             if not is_transient(response):
                 return response
-            wait = min(2**attempt, RETRY_BACKOFF_CAP)
+            if attempt == MAX_RETRIES:
+                break
+            wait = min(2 ** (attempt + 1), RETRY_BACKOFF_CAP)
+            what = type(response).__name__ if isinstance(response, Exception) else error_code(response)
             log.warning(
-                "Transient %s from %s, retry %d/%d in %ds",
-                error_code(response),
-                fn.__name__,
-                attempt,
-                MAX_RETRIES,
-                wait,
+                "Transient %s from %s, retry %d/%d in %ds", what, fn.__name__, attempt + 1, MAX_RETRIES, wait
             )
             await asyncio.sleep(wait)
-            response = await self._call(fn, **kwargs)
         raise NeoError(f"{fn.__name__} still failing after {MAX_RETRIES} retries: {response}")
 
     # ---------------- Market data (consumer key only) ----------------
@@ -223,7 +258,7 @@ class NeoGateway:
             or status not in ("success", "")
         ):
             raise NeoError(f"History failed for {neosymbol} {from_date}..{to_date}: {response}")
-        return response.get("data", {}).get("candles", [])
+        return (response.get("data") or {}).get("candles") or []
 
     # ---------------- Session (TOTP + MPIN) ----------------
 

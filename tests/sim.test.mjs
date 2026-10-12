@@ -149,3 +149,32 @@ test('exit full closes the trade; P&L is then all booked', async () => {
   assert.deepEqual(t.pnl(500), { openPts: 0, openRs: 0, booked: 10 * 5 * 20 - 10 * 5 * 20, total: 0 });
   assert.equal(t.totalPoints(500), 0);
 });
+
+// ---------------- Regressions from the code review ----------------
+
+test('a run can start before its first minute, so minute 0 is played too', () => {
+  const clock = fakeClock();
+  const steps = [];
+  const player = new Player(5, { onStep: (i) => steps.push(i), start: -1, ...clock });
+  assert.equal(player.index, -1);
+  player.setSpeed(10);
+  player.play();
+  clock.advance(6_000);
+  assert.deepEqual(steps, [0]); // the first minute is revealed by playing, not at load
+  player.seek(-5); // clamped to "before the first minute"
+  assert.equal(player.index, -1);
+});
+
+test('late timers catch up on every minute owed (throttled background tab)', () => {
+  // A timer that fires 10 s late, as browsers do for hidden tabs.
+  const clock = fakeClock();
+  const late = { ...clock, setTimer: (fn, ms) => clock.setTimer(fn, Math.max(ms, 10_000)) };
+  const steps = [];
+  const player = new Player(1000, { onStep: (i) => steps.push(i), ...late });
+  player.setSpeed(200); // a minute every 0.3 s
+  player.play();
+  clock.advance(30_000);
+  // 30 s at 200X is 100 minutes, even though the timer only fired every 10 s.
+  assert.equal(steps.length, 100);
+  assert.deepEqual(steps.slice(0, 3), [1, 2, 3]);
+});

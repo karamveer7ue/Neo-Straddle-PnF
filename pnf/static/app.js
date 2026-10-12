@@ -1,6 +1,6 @@
 import { raiseAlert, requestNotifications, setSoundEnabled, soundEnabled } from './alerts.js';
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from './chart.js';
-import { alertWanted } from './pnf.js';
+import { alertWanted, istDay } from './pnf.js';
 
 const MAX_DAYS = 15;
 
@@ -78,6 +78,7 @@ function loadOverlays() {
 
 state.overlays = loadOverlays();
 const FLASH_MS = 8000;
+const CATCHUP_ALERT_S = 5 * 60; // after a reconnect, signals at most this old still alert
 
 for (let d = 1; d <= MAX_DAYS; d++) els.days.add(new Option(String(d), String(d)));
 
@@ -108,6 +109,7 @@ function setChange(el, value, base, suffix = '') {
 function buildPanels(charts) {
   const keys = charts.map((c) => c.key).join();
   if ([...state.panels.keys()].join() === keys) return;
+  for (const { panel } of state.panels.values()) panel.destroy();
   els.charts.replaceChildren();
   state.panels.clear();
   for (const def of charts) {
@@ -155,14 +157,13 @@ function renderPanelHead(entry) {
   const cur = currentPrice(entry);
   q('.ph-price').textContent = cur ? fmtPrice(cur.price) : '–';
   // Change against the first close of the session the current price belongs to.
-  const day = cur && dateKey(cur.ts);
-  const open = cur && panel.series.find((b) => dateKey(b[0]) === day);
+  const open = cur && sessionOpen(panel.series, cur.ts);
   setChange(q('.ph-chg'), cur?.price, open?.[1], ' vs open');
 
   const pnf = panel.pnf;
   const first = panel.series[0];
   renderSignalChip(q('.ph-signal'), panel);
-  q('.ph-meta-text').textContent = pnf
+  q('.ph-meta-text').textContent = pnf && first // a live price alone, before any closed bar, has no history yet
     ? `Box ${fmtPrice(pnf.box)} (0.5% of ${fmtPrice(pnf.p0)}) · ${pnf.reversal}-box · ` +
       `${pnf.columns.length} cols · since ${fmtDay(first[0])}`
     : ' ';
@@ -183,6 +184,16 @@ function renderPanelHead(entry) {
   msg.classList.toggle('error', error);
 }
 
+/** First bar of the session `ts` belongs to (scanned back from the newest bar). */
+function sessionOpen(series, ts) {
+  const day = istDay(ts);
+  let open = null;
+  for (let i = series.length - 1; i >= 0 && istDay(series[i][0]) >= day; i--) {
+    if (istDay(series[i][0]) === day) open = series[i];
+  }
+  return open;
+}
+
 function renderSignalChip(el, panel) {
   const s = panel.lastSignal;
   el.hidden = !s;
@@ -200,10 +211,13 @@ function alertSignals(entry, signals) {
   for (const s of signals) {
     const key = `${entry.def.ce?.key}:${s.type}:${s.ts}:${s.row}`;
     if (state.alerted.has(key)) continue;
+    // Judged on the closed bar that confirmed it: a signal from the forming minute
+    // is not marked, so it can still alert when its bar closes.
+    const close = closeAt(entry.panel.series, s.ts);
+    if (close == null) continue;
     state.alerted.add(key);
     // A double bottom sell alerts only below VWAP (its marker is drawn regardless).
-    const close = entry.panel.series[entry.panel.series.length - 1]?.[1];
-    const vwap = entry.panel.pnf.vwap[s.col];
+    const vwap = entry.panel.pnf.vwapAt(s.ts);
     if (!alertWanted(s, close, vwap)) continue;
     const price = entry.panel.pnf.price(s.row);
     const level = entry.panel.pnf.price(s.level);
@@ -228,6 +242,12 @@ function alertSignals(entry, signals) {
     });
     flashPanel(entry.root, s.type);
   }
+}
+
+/** Close of the bar at `ts` (searched from the newest end, where signals are). */
+function closeAt(series, ts) {
+  for (let i = series.length - 1; i >= 0 && series[i][0] >= ts; i--) if (series[i][0] === ts) return series[i][1];
+  return null;
 }
 
 function flashPanel(root, type) {
@@ -268,20 +288,25 @@ function renderUnderlyings(cfg) {
 
 const SEEN_KEY = 'pnf.alertsSeen'; // loggedAt of the newest alert the viewer has seen
 
+let seenInMemory = null; // fallback when the browser blocks storage
+
 function readSeen() {
   try {
     const v = Number(localStorage.getItem(SEEN_KEY));
-    return Number.isFinite(v) && v > 0 ? v : null;
+    // The in-memory value wins when newer: storage may read but refuse writes (quota).
+    if (Number.isFinite(v) && v > 0) return Math.max(v, seenInMemory ?? 0);
   } catch {
-    return null;
+    // storage unavailable: use the in-memory value
   }
+  return seenInMemory;
 }
 
 function writeSeen(v) {
+  seenInMemory = v;
   try {
     localStorage.setItem(SEEN_KEY, String(v));
   } catch {
-    // storage unavailable: the badge just resets on reload
+    // storage unavailable: kept in memory for this page only
   }
 }
 
@@ -516,11 +541,17 @@ const handlers = {
       entry.def = def;
       if (changed || !entry.panel.series.length) entry.panel.setSeries(def.series);
       else {
-        // Same strikes (e.g. a reconcile): keep the user's scroll position.
+        // Same strikes (e.g. a reconcile or a reconnect): keep the user's scroll position.
+        const lastSeen = entry.panel.series[entry.panel.series.length - 1]?.[0] ?? Infinity;
         const follow = entry.panel.follow;
         entry.panel.series = def.series;
         entry.panel.recompute();
         entry.panel.follow = follow;
+        // Bars that closed while this page was disconnected arrive only here: their
+        // recent signals must still alert (already-alerted ones are skipped by key).
+        // Older ones stay silent, as on a page load: a backlog after a long sleep is noise.
+        const recent = Date.now() / 1000 - CATCHUP_ALERT_S;
+        alertSignals(entry, entry.panel.pnf?.signals.filter((s) => s.ts > lastSeen && s.ts >= recent) ?? []);
       }
     }
     applyLive(msg.live);

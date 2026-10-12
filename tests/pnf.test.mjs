@@ -181,6 +181,21 @@ test('each column carries the intraday VWAP from when it last updated', () => {
   assert.deepEqual(chart.vwap, [upTo(3), upTo(5)]);
 });
 
+test('vwapAt gives the VWAP as of a bar, not as of the end of its column', () => {
+  // The O column keeps falling after the bar at 09:18; its column VWAP is from 09:19.
+  const chart = buildPnf([
+    [at(0), 200, 10],
+    [at(1), 203, 10],
+    [at(2), 205, 20],
+    [at(3), 202, 20],
+    [at(4), 201.5, 40],
+  ]);
+  const at3 = (200 * 10 + 203 * 10 + 205 * 20 + 202 * 20) / 60;
+  assert.equal(chart.vwapAt(at(3)), at3);
+  assert.notEqual(chart.vwap[1], at3);
+  assert.equal(chart.vwapAt(at(9)), null); // no such bar
+});
+
 // ---------------- Alert filter ----------------
 
 test('only a double bottom sell below VWAP alerts; a double top buy never does', async () => {

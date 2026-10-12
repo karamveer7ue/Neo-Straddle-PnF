@@ -15,7 +15,7 @@ const EPS = 1e-9;
  *   p0: number, box: number, reversal: number, smaPeriod: number, sma: Array<number|null>,
  *   columns: Array<{dir: 'X'|'O', boxes: Array<{row: number, ts: number}>, hi: number, lo: number,
  *     startTs: number, endTs: number}>,
- *   vwap: Array<number|null>,
+ *   vwap: Array<number|null>, vwapAt: (ts: number) => number|null,
  *   hi: number, lo: number, price: (row: number) => number, rowOf: (price: number) => number,
  * }}
  */
@@ -78,13 +78,17 @@ export function buildPnf(bars, { boxPct = 0.5, reversal = 3, smaPeriod = 10 } = 
     lo = Math.min(lo, c.lo);
   }
   const price = (row) => p0 + row * box;
+  const vwapByBar = intradayVwap(bars);
+  const vwapByTs = new Map(bars.map((b, i) => [b[0], vwapByBar[i]]));
   return {
     p0, box, reversal, columns, hi, lo, price, rowOf,
     signals: findSignals(columns),
     smaPeriod,
     sma: columnSma(columns, smaPeriod).map((row) => (row === null ? null : price(row))),
     // Intraday VWAP as it stood when each column last updated.
-    vwap: sampleAt(columns, bars, intradayVwap(bars)),
+    vwap: columns.map((col) => vwapByTs.get(col.endTs) ?? null),
+    /** Intraday VWAP as of the bar at `ts` (null if no such bar or no volume yet). */
+    vwapAt: (ts) => vwapByTs.get(ts) ?? null,
   };
 }
 
@@ -116,12 +120,6 @@ export function intradayVwap(bars) {
     out.push(volume > 0 ? pv / volume : null);
   }
   return out;
-}
-
-/** Per column, the value of `perBar` at the column's last bar (`endTs`). */
-function sampleAt(columns, bars, perBar) {
-  const byTs = new Map(bars.map((b, i) => [b[0], perBar[i]]));
-  return columns.map((col) => byTs.get(col.endTs) ?? null);
 }
 
 /**

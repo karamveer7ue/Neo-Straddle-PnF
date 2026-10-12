@@ -260,7 +260,7 @@ Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY`
 | Control | What it does |
 | --- | --- |
 | **Play / Pause** | Starts or pauses the replay (keyboard: Space). |
-| **Back to the start** | Jumps to the first minute of the run. |
+| **Back to the start** | Jumps back to just before the From date's first minute (the clock shows "minute 0"), so the whole run, including its first minute, plays again. |
 | **1X / 10X / 50X / 100X / 200X** | Playback speed; hover a button to see how long a full session takes. |
 | **Timeline** | Drag to jump to any minute; the left and right arrow keys step one minute. The thin bar under it shows the time left until the current minute completes. |
 | **Clock** | The simulated time, to the second, and the minute count (for example, "minute 296 of 375"). |
@@ -310,7 +310,8 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
   After a partial exit the P&L includes the booked part and the bar shows the lots still open; after a full exit it shows the closed trade's result, plus the total when a chart has been traded more than once.
   Brokerage, taxes and slippage are ignored.
 - Buttons work while paused too, at the price on screen.
-- Going back along the timeline clears all simulated trades, since a trade cannot exist before it was opened; moving forward keeps them, and loading a new run starts afresh.
+- Going back along the timeline clears the simulated trades opened (or exited) after the point you go back to, since they have not happened yet; earlier trades and moving forward keep them, and loading a new run starts afresh.
+  Signals after that point alert again when they are replayed.
 
 ### Which dates can be replayed
 

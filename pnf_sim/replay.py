@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from itertools import pairwise
 
-from pnf.neo import NeoGateway
+from pnf.neo import NeoError, NeoGateway
 from pnf.series import IST, Underlying, in_session, now_ist, round_to_strike, session_date
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,8 @@ def validate_dates(start: date, end: date, today: date) -> None:
         raise SimError("The start date must be on or before the end date.")
     if (end - start).days + 1 > MAX_RANGE_DAYS:
         raise SimError(f"Pick at most {MAX_RANGE_DAYS} days (the history API's limit for 1-minute data).")
+    if start < today - timedelta(days=5 * 365):  # within the API's 5 years, leap days aside
+        raise SimError("The history API serves at most 5 years back; pick a later start date.")
 
 
 def offered_expiries(listed: list[str], today: date) -> list[date]:
@@ -204,9 +206,13 @@ async def _leg_candles(gw: NeoGateway, neosymbol: str, context_day: date | None,
         return session_candles(await gw.history(neosymbol, start, end))
     if (end - context_day).days + 1 <= MAX_RANGE_DAYS:
         return session_candles(await gw.history(neosymbol, context_day, end))
-    candles = session_candles(await gw.history(neosymbol, context_day, context_day))
-    candles.update(session_candles(await gw.history(neosymbol, start, end)))
-    return candles
+    candles = session_candles(await gw.history(neosymbol, start, end))
+    try:  # context only: a contract not yet listed that day must not fail the run
+        context = session_candles(await gw.history(neosymbol, context_day, context_day))
+    except NeoError as exc:
+        log.warning("No context day %s for %s: %s", context_day, neosymbol, str(exc)[:200])
+        context = {}
+    return {**context, **candles}
 
 
 # Used only if the contract list cannot be read; lot sizes change over time, so the

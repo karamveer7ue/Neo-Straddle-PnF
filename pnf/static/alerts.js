@@ -77,7 +77,8 @@ export function playSignal(type) {
  */
 export function raiseAlert({ type, title, detail }) {
   const withSound = soundEnabled();
-  if (withSound) playSignal(type);
+  // Until the page may play sound, notes would queue up and all sound at the first click.
+  if (withSound && audioReady()) playSignal(type);
 
   const box = document.getElementById('toasts');
   const toast = document.createElement('div');

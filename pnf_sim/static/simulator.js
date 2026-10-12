@@ -52,6 +52,7 @@ const OVERLAYS_KEY = 'pnf.overlays'; // shared with the live page
 
 const state = {
   underlying: 'NIFTY',
+  pendingUnderlying: null, // an index switch waiting for its expiries
   options: null, // /api/options for the selected index
   run: null, // /api/simulate result
   minutes: [], // every market minute in the run, in order
@@ -64,6 +65,8 @@ const state = {
   cellOverride: null,
   alerted: new Set(),
   started: false, // Play pressed at least once since the run loaded
+  loading: false, // a new run is loading: the old one cannot be played meanwhile
+  bannerTag: '', // what put the current banner up, so only that can take it down
   formingKey: '', // which in-minute step is on screen, so each is drawn once
   formingSpot: null,
 };
@@ -113,7 +116,8 @@ function setChange(el, value, base, suffix = '') {
   el.classList.toggle('down', diff < 0);
 }
 
-function showBanner(text, kind = '') {
+function showBanner(text, kind = '', tag = '') {
+  state.bannerTag = text ? tag : '';
   els.banner.hidden = !text;
   els.banner.className = `banner ${kind}`;
   els.bannerText.textContent = text;
@@ -133,25 +137,56 @@ async function api(url, body) {
 
 // ---------------- Setup row ----------------
 
-function renderUnderlyings(keys) {
+function renderUnderlyings(keys = state.options?.underlyings ?? []) {
+  // The pressed button is the latest choice, even while its expiries are loading;
+  // Load waits for them, or it would load the previous index under the new button.
+  const chosen = state.pendingUnderlying ?? state.underlying;
+  renderLoadButton();
   els.underlyings.replaceChildren(...keys.map((key) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = key;
-    btn.setAttribute('aria-pressed', String(key === state.underlying));
+    btn.setAttribute('aria-pressed', String(key === chosen));
     btn.addEventListener('click', () => {
-      if (key === state.underlying) return;
-      state.underlying = key;
-      els.atm.value = '';
-      loadOptions();
+      if (key === (state.pendingUnderlying ?? state.underlying)) return;
+      if (key === state.underlying) {
+        // Back to the index already loaded: cancel the pending switch.
+        optionsRequest += 1;
+        state.pendingUnderlying = null;
+        renderUnderlyings();
+        return;
+      }
+      loadOptions(key);
     });
     return btn;
   }));
 }
 
-async function loadOptions() {
+function renderLoadButton() {
+  els.load.disabled = state.loading || !!state.pendingUnderlying;
+  els.load.textContent = state.loading ? 'Loading...' : 'Load';
+  els.load.title = state.pendingUnderlying ? `Loading the ${state.pendingUnderlying} expiries...` : '';
+}
+
+let optionsRequest = 0;
+
+/**
+ * Load the form's choices for an index. The index only changes once its
+ * expiries have arrived, and a reply overtaken by a later click is ignored,
+ * so the index, its expiries and its strike step always belong together.
+ */
+async function loadOptions(underlying = state.underlying) {
+  const request = ++optionsRequest;
+  if (state.options && underlying !== state.underlying) {
+    state.pendingUnderlying = underlying;
+    renderUnderlyings();
+  }
   try {
-    const opts = await api(`/api/options?underlying=${state.underlying}`);
+    const opts = await api(`/api/options?underlying=${underlying}`);
+    if (request !== optionsRequest) return; // a later switch is under way
+    if (underlying !== state.underlying) els.atm.value = '';
+    state.underlying = underlying;
+    state.pendingUnderlying = null;
     state.options = opts;
     renderUnderlyings(opts.underlyings);
     els.expiry.replaceChildren(...opts.expiries.map((iso) =>
@@ -164,15 +199,19 @@ async function loadOptions() {
     }
     els.atm.step = String(opts.underlying.strikeStep);
     els.atm.placeholder = 'Auto';
-    showBanner('');
+    if (state.bannerTag === 'options') showBanner(''); // never another message (e.g. a run loading)
   } catch (err) {
-    showBanner(`Could not load the expiries: ${err.message}`, 'error');
+    if (request !== optionsRequest) return;
+    state.pendingUnderlying = null; // stay on the index that is loaded
+    renderUnderlyings();
+    showBanner(`Could not load the ${underlying} expiries: ${err.message}`, 'error', 'options');
   }
 }
 
 function validate() {
   const { start, end } = { start: els.start.value, end: els.end.value };
   const opts = state.options;
+  if (!opts) return 'The expiries have not loaded yet; check the server and reload the page.';
   if (!start || !end) return 'Pick a start and an end date.';
   if (end >= opts.today) return `The end date must be before today (${fmtDate(opts.today, { day: '2-digit', month: 'short', year: 'numeric' })}).`;
   if (start > end) return 'The start date must be on or before the end date.';
@@ -187,12 +226,14 @@ function validate() {
 
 els.setup.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (state.loading || state.pendingUnderlying) return;
   const problem = validate();
   if (problem) {
     showBanner(problem, 'error');
     return;
   }
   state.player?.pause();
+  setLoading(true); // the old run cannot be played while the new one loads
   const body = {
     underlying: state.underlying,
     expiry: els.expiry.value,
@@ -200,19 +241,25 @@ els.setup.addEventListener('submit', async (e) => {
     end: els.end.value,
     atm: els.atm.value ? Number(els.atm.value) : null,
   };
-  els.load.disabled = true;
-  els.load.textContent = 'Loading...';
   showBanner(`Loading ${state.underlying} straddles for ${fmtDate(body.start)} – ${fmtDate(body.end)} ` +
     '(history requests are paced, so this takes about 15 seconds)...');
+  let run = null;
+  let error = null;
   try {
-    startRun(await api('/api/simulate', body));
+    run = await api('/api/simulate', body);
   } catch (err) {
-    showBanner(err.message, 'error');
-  } finally {
-    els.load.disabled = false;
-    els.load.textContent = 'Load';
+    error = err;
   }
+  setLoading(false);
+  if (run) startRun(run);
+  else showBanner(error.message, 'error'); // the previous run stays playable
 });
+
+function setLoading(on) {
+  state.loading = on;
+  renderLoadButton();
+  renderPlayback();
+}
 
 // ---------------- Run ----------------
 
@@ -229,15 +276,16 @@ function startRun(run) {
   state.minutes = [...all].filter((ts) => ts >= run.replayStart).sort((a, b) => a - b);
 
   buildPanels(run.charts);
-  state.player = new Player(state.minutes.length, { onStep: (i) => reveal(i, true), onState: renderPlayback });
+  state.player?.pause(); // the previous run's clock must never drive these charts
+  // start: -1 - nothing of the run is revealed yet, so its first minute is played too.
+  state.player = new Player(state.minutes.length, { onStep: (i) => reveal(i, true), onState: renderPlayback, start: -1 });
   state.player.setSpeed(state.speed);
+  els.seek.min = '-1';
   els.seek.max = String(state.minutes.length - 1);
-  els.seek.disabled = false;
-  els.play.disabled = false;
-  els.restart.disabled = false;
+  renderPlayback();
   els.clock.hidden = false;
   els.spotBox.hidden = false;
-  reveal(0, false);
+  reveal(-1, false);
 
   const days = run.sessions.map((d) => fmtDate(d)).join(', ');
   const atmFrom = run.atm === run.atmAuto
@@ -251,6 +299,7 @@ function startRun(run) {
 }
 
 function buildPanels(charts) {
+  for (const { panel } of state.panels.values()) panel.destroy();
   els.charts.replaceChildren();
   state.panels.clear();
   for (const def of charts) {
@@ -270,8 +319,11 @@ function buildPanels(charts) {
  * Show the run as of minute i. While playing, each new minute's bar is added
  * to the charts (and new signals alert); a jump rebuilds the charts silently.
  */
+/** The last revealed moment: minute i's start, or just before the run (i = -1). */
+const revealedTs = (i) => (i >= 0 ? state.minutes[i] : state.run.replayStart - 1);
+
 function reveal(i, stepping) {
-  const ts = state.minutes[i];
+  const ts = revealedTs(i);
   for (const entry of state.panels.values()) {
     const bar = state.bars.get(entry.def.key).get(ts);
     entry.liveLegs = null;
@@ -319,18 +371,28 @@ function showFormingMinute() {
 }
 
 function seekTo(i) {
-  if (!state.player) return;
-  const back = i < state.player.index;
-  state.player.seek(i);
-  // A trade cannot exist before it was opened: going back in time clears them.
-  if (back && [...state.panels.values()].some((e) => e.trade || e.closed.length)) {
-    for (const entry of state.panels.values()) {
+  const p = state.player;
+  if (!p) return;
+  const target = Math.max(-1, Math.min(state.minutes.length - 1, i));
+  if (target === p.index && p.progress === 0) return; // nowhere to go (e.g. Left at the start)
+  p.seek(target);
+  const t = revealedTs(p.index);
+  // Anything that happened after the new moment has not happened yet: trades opened or
+  // exited later are removed, and signals after it may alert again when played.
+  const later = (trade) => trade.ts > t || trade.exits.some((x) => x.ts > t);
+  let cleared = false;
+  for (const entry of state.panels.values()) {
+    if (entry.trade && later(entry.trade)) {
       entry.trade = null;
-      entry.closed = [];
+      cleared = true;
     }
-    showBanner('Simulated trades were cleared because the replay went back in time.', 'warn');
+    const kept = entry.closed.filter((trade) => !later(trade));
+    cleared ||= kept.length !== entry.closed.length;
+    entry.closed = kept;
   }
-  reveal(state.player.index, false);
+  for (const key of [...state.alerted]) if (Number(key.split(':')[2]) > t) state.alerted.delete(key);
+  if (cleared) showBanner('Simulated trades after this point were cleared: the replay went back before them.', 'warn');
+  reveal(p.index, false);
 }
 
 // ---------------- Rendering ----------------
@@ -362,7 +424,7 @@ function renderPanelHead(entry) {
   setChange(q('.ph-chg'), price, open?.[1], ' vs open');
 
   const pnf = panel.pnf;
-  q('.ph-meta-text').textContent = pnf
+  q('.ph-meta-text').textContent = pnf && panel.series.length
     ? `Box ${fmtPrice(pnf.box)} (0.5% of ${fmtPrice(pnf.p0)}) · ${pnf.reversal}-box · ` +
       `${pnf.columns.length} cols · since ${fmtDay(panel.series[0][0])}`
     : ' ';
@@ -402,7 +464,7 @@ function spotAt(ts) {
 function renderClock() {
   const p = state.player;
   if (!p) return;
-  const ts = state.minutes[p.index];
+  const ts = state.minutes[p.index]; // undefined before the first minute
   // Simulated wall time: the revealed minute has closed, and the next one is under way.
   const nextStart = state.minutes[p.index + 1] ?? ts + 60;
   const now = p.atEnd ? ts + 60 : nextStart + Math.floor(p.progress * 60);
@@ -410,9 +472,11 @@ function renderClock() {
   els.simTime.textContent = `${fmtDay(now)} ${fmtTime(now)}:${secs}`;
   els.simCount.textContent = `minute ${p.index + 1} of ${state.minutes.length}`;
   els.seek.value = String(p.index);
-  const spot = state.formingSpot ?? spotAt(ts);
+  // The change is against the previous close of the session being simulated now.
+  const day = dateKey(p.atEnd ? ts : nextStart);
+  const spot = state.formingSpot ?? (ts !== undefined ? spotAt(ts) : state.run.spotPrevCloses[day]);
   els.spot.textContent = spot != null ? fmtPrice(spot) : '–';
-  setChange(els.spotChg, spot, state.run.spotPrevCloses[dateKey(ts)]);
+  setChange(els.spotChg, spot, state.run.spotPrevCloses[day]);
   els.spotStat.title = `${state.run.underlying.key} index (spot) at the simulated time`;
 }
 
@@ -421,9 +485,14 @@ function renderPlayback() {
   els.play.setAttribute('aria-pressed', String(!!p?.playing));
   els.play.title = p?.playing ? 'Pause (Space)' : p?.atEnd ? 'Replay finished' : 'Play (Space)';
   els.playLabel.textContent = p?.playing ? 'Pause' : 'Play';
-  els.play.disabled = !p || (p.atEnd && !p.playing);
+  const off = state.loading || !p;
+  els.play.disabled = off || (p.atEnd && !p.playing);
+  els.seek.disabled = off;
+  els.restart.disabled = off;
   for (const btn of els.speeds.children) btn.setAttribute('aria-pressed', String(Number(btn.dataset.speed) === state.speed));
-  if (p?.atEnd) showBanner('Replay finished. Drag the timeline or press Back to the start to watch again.', 'ok');
+  if (p?.atEnd && !state.loading) {
+    showBanner('Replay finished. Drag the timeline or press Back to the start to watch again.', 'ok', 'finished');
+  } else if (state.bannerTag === 'finished') showBanner('');
 }
 
 // The thin bar under the timeline: time left until the next minute is revealed.
@@ -444,11 +513,13 @@ function alertSignals(entry, signals) {
   for (const s of signals) {
     const key = `${entry.def.key}:${s.type}:${s.ts}:${s.row}`;
     if (state.alerted.has(key)) continue;
-    state.alerted.add(key);
     const pnf = entry.panel.pnf;
+    // Judged on the closed bar that confirmed it (not marked until that bar exists).
+    const close = entry.panel.series.findLast((b) => b[0] === s.ts)?.[1];
+    if (close == null) continue;
+    state.alerted.add(key);
     // A double bottom sell alerts only below VWAP (its marker is drawn regardless).
-    const close = entry.panel.series[entry.panel.series.length - 1]?.[1];
-    const vwap = pnf.vwap[s.col];
+    const vwap = pnf.vwapAt(s.ts);
     if (!alertWanted(s, close, vwap)) continue;
     raiseAlert({
       type: s.type,
@@ -606,7 +677,7 @@ els.speeds.replaceChildren(...SPEEDS.map((speed) => {
 
 function togglePlay() {
   const p = state.player;
-  if (!p) return;
+  if (!p || state.loading || (p.atEnd && !p.playing)) return; // e.g. Space while a new run loads
   if (p.playing) p.pause();
   else {
     showBanner('');
@@ -619,18 +690,20 @@ function togglePlay() {
 }
 
 els.play.addEventListener('click', togglePlay);
-els.restart.addEventListener('click', () => seekTo(0));
+els.restart.addEventListener('click', () => seekTo(-1));
 els.seek.addEventListener('input', () => seekTo(Number(els.seek.value)));
 
 document.addEventListener('keydown', (e) => {
-  if (!state.player || e.target.closest('input, select, textarea')) return;
+  // Text fields keep their keys; the timeline slider does not need Space. Browser
+  // shortcuts (e.g. Alt + Left for Back) are left alone.
+  if (!state.player || e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.target.closest('input:not([type="range"]), select, textarea')) return;
   if (e.key === ' ') {
     e.preventDefault();
     togglePlay();
-  } else if (e.key === 'ArrowRight') {
-    seekTo(state.player.index + 1);
-  } else if (e.key === 'ArrowLeft') {
-    seekTo(state.player.index - 1);
+  } else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !els.seek.disabled) {
+    e.preventDefault(); // a focused timeline would step a second minute on its own
+    seekTo(state.player.index + (e.key === 'ArrowRight' ? 1 : -1));
   }
 });
 

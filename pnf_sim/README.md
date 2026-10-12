@@ -25,7 +25,7 @@ It can run at the same time as the live app (`python -m pnf`, port 8765).
 | Control | What it does |
 | --- | --- |
 | **Play / Pause** | Starts or pauses the replay (keyboard: Space). Nothing moves until you press Play. |
-| **Back to the start** | Jumps to the first minute. |
+| **Back to the start** | Jumps back to just before the From date's first minute (the clock shows "minute 0"), so the whole run, including its first minute, plays again. |
 | **1X / 10X / 50X / 100X / 200X** | Speed. 1X is real time: one market minute per minute (a full session takes 6 h 15 min). 10X: about 38 min per session; 50X: about 8 min; 100X: about 4 min; 200X: a minute every 0.3 seconds, about 2 min per session. |
 | **Timeline** | Drag to jump to any minute (keyboard: left and right arrows step one minute). The thin bar below it shows the time left until the next minute appears. |
 | **Clock** | The simulated time (to the second) and the minute count. |
@@ -56,7 +56,8 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
   After a partial exit the P&L includes what was booked, and the bar shows the lots still open; after a full exit it shows the closed trade's result, and the total when a chart has been traded more than once.
   Brokerage, taxes and slippage are ignored.
 - Trades can be placed and exited while paused, at the price on screen.
-  Going back along the timeline clears all simulated trades (a trade cannot exist before it was opened); moving forward keeps them, and loading a new run starts afresh.
+  Going back along the timeline clears the simulated trades opened (or exited) after the point you go back to, since they have not happened yet; earlier trades and moving forward keep them, and loading a new run starts afresh.
+  Signals after that point alert again when they are replayed.
 
 ## Limits
 

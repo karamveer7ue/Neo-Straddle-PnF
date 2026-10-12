@@ -59,6 +59,16 @@ themeQuery.addEventListener('change', () => {
   for (const panel of PnfPanel.all) panel.render();
 });
 
+// Moving the window to a screen with another pixel density does not change any
+// CSS size, so no ResizeObserver fires: watch the density itself and re-arm.
+function watchPixelRatio() {
+  matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`).addEventListener('change', () => {
+    for (const panel of PnfPanel.all) panel.resize();
+    watchPixelRatio();
+  }, { once: true });
+}
+watchPixelRatio();
+
 export class PnfPanel {
   static all = new Set();
 
@@ -99,8 +109,19 @@ export class PnfPanel {
       this.onHover?.(null);
       this.render();
     });
-    new ResizeObserver(() => this.resize()).observe(this.el);
+    this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.resizeObserver.observe(this.el);
     PnfPanel.all.add(this);
+  }
+
+  /** Release the panel for good (its observer, pending frame and theme/density hooks). */
+  destroy() {
+    if (this.hover) this.onHover?.(null, null); // a removed panel never gets its mouseleave
+    this.hover = null;
+    this.resizeObserver.disconnect();
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    PnfPanel.all.delete(this);
   }
 
   // ---------------- Data ----------------
@@ -431,7 +452,9 @@ export class PnfPanel {
     const sma = this.currentSma;
     if (this.overlays.sma && sma !== null) tags.push({ y: this.priceY(sma), value: sma, bg: t.sma, fg: t.smaText });
     this.drawAxis(chartW, firstRow, lastRow, labelStep, tags, hit);
-    this.onHover?.(hit && hit.box ? this.describe(hit) : null, this.hover);
+    // Only the hovered panel drives the shared tooltip; the others redrawing on a tick
+    // must not hide it (mouseleave clears it when the pointer goes).
+    if (this.hover) this.onHover?.(hit && hit.box ? this.describe(hit) : null, this.hover);
   }
 
   priceY(price) {
