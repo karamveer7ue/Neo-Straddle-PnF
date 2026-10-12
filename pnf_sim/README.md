@@ -7,20 +7,25 @@ It needs only the consumer key from `.env` (market data), so it never asks for a
 
 ## Running
 
+From the project folder, `./start.sh` starts the simulator together with the live app (port 8765); if either is already running, it asks whether to restart or skip it.
+See [Running](../README.md#running) in the main README for its options.
+To run the simulator on its own:
+
 ```sh
 .venv/bin/python -m pnf_sim              # http://127.0.0.1:8766
 .venv/bin/python -m pnf_sim --port 9001  # any other port
 ```
 
-It can run at the same time as the live app (`python -m pnf`, port 8765).
-
 ## Using it
 
-1. Pick **NIFTY** or **SENSEX**.
+1. Pick **NIFTY** or **SENSEX** (Load waits until that index's expiries have loaded).
 2. Pick an **expiry**: the next four listed expiries (NIFTY: Tuesdays, SENSEX: Thursdays; the exchange moves an expiry for a holiday, e.g. 19 Oct 2026 is a Monday).
-3. Pick **From** and **To** dates. Both must be before today, and the range can be at most 30 days.
+3. Pick **From** and **To** dates.
+   Both must be before today, the range can be at most 30 days, and the start at most 5 years back.
 4. Optionally set an **ATM** strike; leave it empty to use the strike nearest to the start day's open.
 5. Press **Load** (about 15 seconds: history requests are paced to stay within the API's rate limits), then **Play**.
+   The previous run is paused while loading and stays as it was if loading fails.
+   The last 8 runs are kept in memory for the day, so loading one again is instant.
 
 | Control | What it does |
 | --- | --- |

@@ -13,6 +13,7 @@ User-facing documentation is in `README.md`.
 Always use the project virtualenv (Python 3.12); dependencies are pinned in `requirements.txt` (`.venv/bin/pip install -r requirements.txt`).
 
 ```sh
+./start.sh                              # live app (8765) and simulator (8766) together; asks to restart or skip a running one (--restart / --skip)
 .venv/bin/python -m pnf                 # P&F web app on http://127.0.0.1:8765 (--port to change)
 .venv/bin/python -m pytest              # Python tests (tests/test_*.py)
 .venv/bin/python -m pytest tests/test_engine.py::test_live_minute_bars_and_reconcile   # one test

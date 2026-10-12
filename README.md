@@ -151,6 +151,59 @@ MPIN=123456
 
 ## Running
 
+### Starting everything with `start.sh`
+
+The easiest way is to start the live app and the [simulator](#simulator) together, from the project folder:
+
+```sh
+./start.sh
+```
+
+```text
+Live app:  http://127.0.0.1:8765
+Simulator: http://127.0.0.1:8766
+Press Ctrl+C to stop both.
+[live] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+[sim]  INFO:     Uvicorn running on http://127.0.0.1:8766 (Press CTRL+C to quit)
+```
+
+- **Output:** both servers log to the same terminal, each line tagged `[live]` or `[sim]`.
+- **Stopping:** Ctrl+C stops both cleanly; if one of them exits (or crashes), the other is stopped too, so you never end up with half the setup running.
+- **Checks first:** it stops with a clear message if the virtualenv (`.venv`) or the `.env` file is missing (see [Setup](#setup)).
+- **A server already running:** if something is already listening on a port, `start.sh` names it and asks what to do:
+
+  ```text
+  The live app is already running on port 8765 (PID 89522).
+  Restarting it ends its session: you will need a fresh TOTP.
+  [r]estart or [s]kip?
+  ```
+
+  - **r (restart)** stops that server and starts a fresh one with the current code.
+    Restarting the live app ends its Neo session, so the page asks for a new TOTP.
+  - **s (skip)** leaves it running untouched and starts only the other server; Ctrl+C then stops only the one `start.sh` started.
+    If both are skipped, it says "Nothing to start." and exits.
+  - Any other answer asks again.
+  - Without a terminal to ask (for example, when run from another script), it stops instead of guessing; pass `--restart` or `--skip`.
+
+Options:
+
+| Option | What it does |
+| --- | --- |
+| `--restart` | Restart servers that are already running, without asking. |
+| `--skip` | Leave servers that are already running alone, without asking. |
+| `--live-port N` | Port for the live app (default 8765). |
+| `--sim-port N` | Port for the simulator (default 8766); must differ from the live app's. |
+| `-h`, `--help` | Show the usage. |
+
+```sh
+./start.sh --restart                         # e.g. after pulling new code
+./start.sh --live-port 9000 --sim-port 9001  # other ports
+```
+
+Both servers listen on `127.0.0.1` only (see [Security](#security)).
+
+### Starting the live app on its own
+
 ```sh
 .venv/bin/python -m pnf              # serves http://127.0.0.1:8765
 .venv/bin/python -m pnf --port 9000  # any other port
@@ -234,24 +287,30 @@ It reads only market data, so it needs just the consumer key from `.env` and nev
 
 ### Running the simulator
 
+`./start.sh` starts it together with the live app (see [Starting everything with `start.sh`](#starting-everything-with-startsh)).
+To run it on its own:
+
 ```sh
 .venv/bin/python -m pnf_sim              # http://127.0.0.1:8766
 .venv/bin/python -m pnf_sim --port 9001  # any other port
 ```
 
-It can run at the same time as the live app (`python -m pnf` on port 8765); open each in its own tab.
+It can run at the same time as the live app (port 8765); open each in its own tab.
 Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY` in `.env` is used.
 
 ### Setting up a run
 
 1. Pick **NIFTY** or **SENSEX**.
+   Switching index loads that index's expiries first (a second or two); Load waits until they arrive, so a run always uses the index whose button is pressed.
 2. Pick an **expiry**: the next four listed expiries.
    NIFTY weeklies expire on Tuesdays and SENSEX weeklies on Thursdays; when the exchange moves an expiry for a holiday, the list shows the actual date (for example, 19 Oct 2026 is a Monday).
 3. Pick **From** and **To** dates.
-   Both must be before today (the page and the server both check this), and a run can cover at most 30 days.
+   Both must be before today (the page and the server both check this), a run can cover at most 30 days, and the start can be at most 5 years back (the history API's limit).
 4. Optionally type an **ATM** strike (a multiple of 50 for NIFTY, 100 for SENSEX); leave it empty to use the strike nearest to the start day's index open.
 5. Press **Load**.
-   The history requests are paced to stay within the API's rate limits, so loading takes about 15 seconds; a run you load again is served instantly from memory.
+   The history requests are paced to stay within the API's rate limits, so loading takes about 15 seconds.
+   While it loads, the previous run is paused and cannot be played; if loading fails, the error is shown and the previous run stays as it was.
+   The last 8 runs are kept in memory for the day, so loading one again is instant, even if you reloaded the page while it was being built.
 6. Press **Play**.
    Nothing moves until you do, and the panels say so.
 
@@ -262,7 +321,7 @@ Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY`
 | **Play / Pause** | Starts or pauses the replay (keyboard: Space). |
 | **Back to the start** | Jumps back to just before the From date's first minute (the clock shows "minute 0"), so the whole run, including its first minute, plays again. |
 | **1X / 10X / 50X / 100X / 200X** | Playback speed; hover a button to see how long a full session takes. |
-| **Timeline** | Drag to jump to any minute; the left and right arrow keys step one minute. The thin bar under it shows the time left until the current minute completes. |
+| **Timeline** | Drag to jump to any minute; the left and right arrow keys step exactly one minute (also while the timeline has focus). The thin bar under it shows the time left until the current minute completes. |
 | **Clock** | The simulated time, to the second, and the minute count (for example, "minute 296 of 375"). |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
 | **VWAP / SMA 10, zoom, bell** | The same as on the live page; the VWAP/SMA choice is shared with it. |
@@ -278,6 +337,10 @@ Speeds:
 | 200X | 0.3 seconds | about 1.9 min |
 
 Changing speed mid-minute keeps the progress already made towards the next minute, and pausing holds the replay exactly where it is.
+The replay keeps its pace in a background tab: when the browser delays its timers, the minutes owed are caught up when the tab runs again.
+When the run reaches its end, a "Replay finished" banner appears; it goes away once you drag back or press Back to the start.
+
+Keyboard shortcuts work anywhere on the page except while typing in a field (the date, ATM and expiry inputs keep their keys), and combinations with Alt, Ctrl or Cmd are left to the browser (for example, Alt + Left for Back).
 
 ### How a replay works
 
@@ -319,7 +382,8 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
   For example, on 12 Oct 2026 the 13 Oct weekly can replay the days before it, and so can the monthlies further out.
 - **How far back:** a weekly contract usually trades properly for only the last two or three weeks before its expiry (it is thin when first listed); monthlies reach further back.
   If the chosen contract had not started trading on the chosen dates, the simulator says so instead of showing empty charts.
-- **At most 30 days per run**, the history API's limit for 1-minute candles.
+- **At most 30 days per run**, the history API's limit for 1-minute candles, and **at most 5 years back**.
+- **Context day:** if the chosen contract had not traded yet on the session before From, the run still loads; that chart simply starts at the From date.
 
 The simulator's own [README](pnf_sim/README.md) has the same details next to its code.
 
@@ -347,6 +411,7 @@ node --test tests/*.test.mjs                   # Point & Figure engine and simul
 | `pnf/static/app.js` | Page wiring: controls, server messages, panel headers. |
 | `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits) and `POST /api/simulate` (builds a run); serves the live app's static files read-only. |
 | `pnf_sim/replay.py` | Builds a simulator run: date checks, expiries offered, strikes from the start day's open, straddle series with each minute's price path, previous closes for the spot. |
+| `start.sh` | Starts the live app and the simulator together (see [Running](#running)). |
 | `pnf_sim/static/` | The simulator page (`simulator.html`, `simulator.js`, `sim.css`), its replay clock (`player.js`) and its simulated trades (`trades.js`). |
 | `tests/` | Python tests (the live engine against a fake gateway, and the simulator's run building) and JavaScript tests (the P&F engine and the simulator's replay clock). |
 
