@@ -7,6 +7,8 @@ History comes from the Neo historical API, live prices stream over the Neo WebSo
 
 ![Three NIFTY straddle Point & Figure charts with VWAP and signal markers](docs/screenshot.png)
 
+A separate [simulator](#simulator) replays past sessions on the same charts at 1X to 200X speed.
+
 ## Contents
 
 - [Features](#features)
@@ -17,6 +19,7 @@ History comes from the Neo historical API, live prices stream over the Neo WebSo
 - [Using the screen](#using-the-screen)
 - [Alerts](#alerts)
 - [Data and timing details](#data-and-timing-details)
+- [Simulator](#simulator)
 - [Development](#development)
 - [Security](#security)
 - [Limitations](#limitations)
@@ -34,6 +37,7 @@ History comes from the Neo historical API, live prices stream over the Neo WebSo
 - **VWAP and SMA 10:** the straddle's intraday VWAP (yellow) and a 10-column simple moving average (light black; soft grey in dark mode), each switchable on or off, also shown in each panel header and on the price axis.
 - **Signals:** double top buy and double bottom sell are marked on the charts, with a toast, a panel flash, a chime and (when the tab is in the background) a system notification for each new one.
 - **Comfortable charts:** hover any box for its price and the time it printed, zoom in and out, scroll through history, light and dark themes.
+- **Simulator:** replay past sessions minute by minute at 1X, 10X, 50X, 100X or 200X, with the same charts, overlays and signals (see [Simulator](#simulator)).
 
 ## How it works
 
@@ -217,12 +221,90 @@ Until then a toast tells you that sound is waiting for a click.
 - **Holidays:** a weekday whose candles load fine but come back empty after 09:30 is treated as a market holiday and left out of the window.
 - **Saved settings:** the index on screen, each index's ATM override, the day count and the expiry choice are stored in `.pnf-config.json` (gitignored); the alert log in `.pnf-alerts.json`.
 
+## Simulator
+
+The simulator replays past NIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page, so you can watch how the straddles, VWAP, SMA 10 and the double top / double bottom signals developed on a day that has already traded.
+
+![The straddle simulator replaying a NIFTY session at 50X, mid-afternoon](docs/simulator.png)
+
+It is a separate app (`pnf_sim/`), so it never interferes with the live page, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, SMA 10, signal detection, the chart renderer and the alerts.
+It reads only market data, so it needs just the consumer key from `.env` and never asks for a TOTP.
+
+### Running the simulator
+
+```sh
+.venv/bin/python -m pnf_sim              # http://127.0.0.1:8766
+.venv/bin/python -m pnf_sim --port 9001  # any other port
+```
+
+It can run at the same time as the live app (`python -m pnf` on port 8765); open each in its own tab.
+Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY` in `.env` is used.
+
+### Setting up a run
+
+1. Pick **NIFTY** or **SENSEX**.
+2. Pick an **expiry**: the next four listed expiries.
+   NIFTY weeklies expire on Tuesdays and SENSEX weeklies on Thursdays; when the exchange moves an expiry for a holiday, the list shows the actual date (for example, 19 Oct 2026 is a Monday).
+3. Pick **From** and **To** dates.
+   Both must be before today (the page and the server both check this), and a run can cover at most 30 days.
+4. Optionally type an **ATM** strike (a multiple of 50 for NIFTY, 100 for SENSEX); leave it empty to use the strike nearest to the start day's index open.
+5. Press **Load**.
+   The history requests are paced to stay within the API's rate limits, so loading takes about 15 seconds; a run you load again is served instantly from memory.
+6. Press **Play**.
+   Nothing moves until you do, and the panels say so.
+
+### Playback controls
+
+| Control | What it does |
+| --- | --- |
+| **Play / Pause** | Starts or pauses the replay (keyboard: Space). |
+| **Back to the start** | Jumps to the first minute of the run. |
+| **1X / 10X / 50X / 100X / 200X** | Playback speed; hover a button to see how long a full session takes. |
+| **Timeline** | Drag to jump to any minute; the left and right arrow keys step one minute. The thin bar under it shows the time left until the current minute completes. |
+| **Clock** | The simulated time, to the second, and the minute count (for example, "minute 296 of 375"). |
+| **Spot** | The index at the simulated time, with its change since the previous session's close. |
+| **VWAP / SMA 10, zoom, bell** | The same as on the live page; the VWAP/SMA choice is shared with it. |
+
+Speeds:
+
+| Speed | One market minute takes | A full session (375 minutes) takes |
+| --- | --- | --- |
+| 1X | 60 seconds (real time) | 6 h 15 min |
+| 10X | 6 seconds | about 38 min |
+| 50X | 1.2 seconds | about 7.5 min |
+| 100X | 0.6 seconds | about 3.75 min |
+| 200X | 0.3 seconds | about 1.9 min |
+
+Changing speed mid-minute keeps the progress already made towards the next minute, and pausing holds the replay exactly where it is.
+
+### How a replay works
+
+- **One continuous run:** the trading days between the two dates play back-to-back on one chart, like the live page's multi-day view; weekends and holidays are skipped automatically.
+- **Strikes** are fixed for the whole run, from the start day's index open (or the ATM you typed): ATM - 200, ATM and ATM + 200 for NIFTY, ATM - 500, ATM and ATM + 500 for SENSEX.
+- **Chart rules** are the live page's: box size 0.5% of the run's first straddle close, 3-box reversal, VWAP restarting at each session's open, SMA 10 of column midpoints.
+- **Movement within each minute:** the history API serves 1-minute candles, so each minute plays along its candle's likely path in four steps: open, the two extremes, then the close (a rising candle is taken to dip first, a falling one to rally first).
+  The straddle prices, the CE and PE prices, the forming boxes (drawn faded, as on the live page), VWAP and the spot all move during the minute, and the minute's bar is completed at its close.
+  For the straddle, the CE and PE paths are added step by step, which approximates the straddle's true path within the minute.
+- **Signals and alerts:** double top buy and double bottom sell are marked on the charts and raise a toast, a panel flash and a chime, labelled "(simulation)".
+  They fire only while playing; dragging along the timeline rebuilds the charts silently, so jumping around never replays old alerts.
+  Toasts close themselves after 12 seconds (hover to keep one open), and simulated alerts are never written to the live page's alert log.
+
+### Which dates can be replayed
+
+- **Only contracts still listed today.** The API cannot fetch option contracts that have expired, so a past day is replayed with one of the next four listed expiries, not with the contract that was nearest on that day.
+  For example, on 12 Oct 2026 the 13 Oct weekly can replay the days before it, and so can the monthlies further out.
+- **How far back:** a weekly contract usually trades properly for only the last two or three weeks before its expiry (it is thin when first listed); monthlies reach further back.
+  If the chosen contract had not started trading on the chosen dates, the simulator says so instead of showing empty charts.
+- **At most 30 days per run**, the history API's limit for 1-minute candles.
+
+The simulator's own [README](pnf_sim/README.md) has the same details next to its code.
+
 ## Development
 
 ```sh
-.venv/bin/python -m pytest                     # Python tests
+.venv/bin/python -m pytest                     # Python tests (live app and simulator)
 .venv/bin/python -m pytest tests/test_engine.py::test_live_minute_bars_and_reconcile   # one test
-node --test tests/*.test.mjs                   # Point & Figure engine tests
+node --test tests/*.test.mjs                   # Point & Figure engine and simulator playback tests
 .venv/bin/ruff check && .venv/bin/ruff format --check
 ```
 
@@ -239,7 +321,10 @@ node --test tests/*.test.mjs                   # Point & Figure engine tests
 | `pnf/static/axis.js` | Price-axis tag layout, so the price, VWAP and SMA tags never overlap. |
 | `pnf/static/alerts.js` | Toasts, sounds and system notifications. |
 | `pnf/static/app.js` | Page wiring: controls, server messages, panel headers. |
-| `tests/` | Python tests (including the engine against a fake gateway) and JavaScript tests for the P&F engine. |
+| `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits) and `POST /api/simulate` (builds a run); serves the live app's static files read-only. |
+| `pnf_sim/replay.py` | Builds a simulator run: date checks, expiries offered, strikes from the start day's open, straddle series with each minute's price path, previous closes for the spot. |
+| `pnf_sim/static/` | The simulator page (`simulator.html`, `simulator.js`, `sim.css`) and its replay clock (`player.js`). |
+| `tests/` | Python tests (the live engine against a fake gateway, and the simulator's run building) and JavaScript tests (the P&F engine and the simulator's replay clock). |
 
 ### Testing the live path outside market hours
 
