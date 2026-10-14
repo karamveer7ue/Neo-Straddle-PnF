@@ -7,6 +7,8 @@ History comes from the Neo historical API, live prices stream over the Neo WebSo
 
 ![Three NIFTY straddle Point & Figure charts with VWAP and signal markers](docs/screenshot.png)
 
+Optionally, each chart can sell its straddle through a Zerodha Kite account, with live P&L and Exit 50% / Exit Full buttons for the positions taken (see [Trading through Kite](#trading-through-kite)).
+
 A separate [simulator](#simulator) replays past sessions on the same charts at 1X to 200X speed.
 
 ## Contents
@@ -18,6 +20,7 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - [Running](#running)
 - [Using the screen](#using-the-screen)
 - [Alerts](#alerts)
+- [Trading through Kite](#trading-through-kite)
 - [Data and timing details](#data-and-timing-details)
 - [Simulator](#simulator)
 - [Development](#development)
@@ -37,6 +40,7 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - **VWAP and SMA 10:** the straddle's intraday VWAP (yellow) and a 10-column simple moving average (light black; soft grey in dark mode), each switchable on or off, also shown in each panel header and on the price axis.
 - **Signals:** double top buy and double bottom sell are marked on the charts.
   A new double bottom sell with the straddle below its VWAP raises a toast, a panel flash, a chime and (when the tab is in the background) a system notification; double top buys, and sells at or above VWAP, are marked only.
+- **Trading through Kite (optional):** a quantity field and Sell button under each chart, live P&L for the positions taken, and Exit 50% / Exit Full on the charts holding one.
 - **Comfortable charts:** hover any box for its price and the time it printed, zoom in and out, scroll through history, light and dark themes.
 - **Simulator:** replay past sessions minute by minute at 1X, 10X, 50X, 100X or 200X, with the same charts, overlays and signals, and practise selling the straddles with live P&L (see [Simulator](#simulator)).
 
@@ -149,6 +153,8 @@ MPIN=123456
 
 `.env` is listed in `.gitignore`; never commit it.
 
+To trade from the charts through Zerodha Kite, also fill in `KITE_API_KEY` and `KITE_API_SECRET` (see [Trading through Kite](#trading-through-kite)); left empty, the app runs without trading.
+
 ## Running
 
 ### Starting everything with `start.sh`
@@ -160,11 +166,11 @@ The easiest way is to start the live app and the [simulator](#simulator) togethe
 ```
 
 ```text
-Live app:  http://127.0.0.1:8765
-Simulator: http://127.0.0.1:8766
+Live app:  https://127.0.0.1:8765
+Simulator: https://127.0.0.1:8766
 Press Ctrl+C to stop both.
-[live] INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
-[sim]  INFO:     Uvicorn running on http://127.0.0.1:8766 (Press CTRL+C to quit)
+[live] INFO:     Uvicorn running on https://127.0.0.1:8765 (Press CTRL+C to quit)
+[sim]  INFO:     Uvicorn running on https://127.0.0.1:8766 (Press CTRL+C to quit)
 ```
 
 - **Output:** both servers log to the same terminal, each line tagged `[live]` or `[sim]`.
@@ -202,10 +208,27 @@ Options:
 
 Both servers listen on `127.0.0.1` only (see [Security](#security)).
 
+### HTTPS
+
+Both servers are served over HTTPS (Kite only returns to an `https` address after login), so open `https://127.0.0.1:8765`; plain `http://` no longer answers.
+
+- **Certificate:** on first start the app creates a certificate for `127.0.0.1` and `localhost` in `certs/` (gitignored), valid for a year and renewed automatically 30 days before it expires.
+- **Browser warning:** the certificate is the app's own, so the first visit shows "Your connection is not private".
+  Click **Advanced**, then **Proceed to 127.0.0.1**; the browser remembers the choice for a while.
+- **No warning at all (recommended):** let your Mac trust the certificate once (it asks for your password):
+
+  ```sh
+  security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db certs/localhost.pem
+  ```
+
+  Restart the browser afterwards.
+  Repeat this after the yearly renewal (a new `certs/localhost.pem`); to undo it, delete "Straddle P&F (127.0.0.1)" in Keychain Access.
+- **Your own certificate:** a valid pair placed at `certs/localhost.pem` and `certs/localhost-key.pem` (for example from [mkcert](https://github.com/FiloSottile/mkcert): `mkcert -cert-file certs/localhost.pem -key-file certs/localhost-key.pem 127.0.0.1 localhost ::1`) is used instead.
+
 ### Starting the live app on its own
 
 ```sh
-.venv/bin/python -m pnf              # serves http://127.0.0.1:8765
+.venv/bin/python -m pnf              # serves https://127.0.0.1:8765
 .venv/bin/python -m pnf --port 9000  # any other port
 ```
 
@@ -266,6 +289,17 @@ Alerts are detected in the browser, so they are only logged while at least one p
 Browsers block sound until you have interacted with the page, so click anywhere once (entering the TOTP counts).
 Until then a toast tells you that sound is waiting for a click.
 
+## Trading through Kite
+
+With a Zerodha Kite Connect app's key and secret in `.env`, the page can place orders:
+
+- **Under each chart:** enter a quantity (in units, a multiple of the lot size) and press **Sell**; the chart's CE and PE are sold at market at once, with no confirmation.
+- **On charts holding a position:** its live P&L and **Exit 50%** / **Exit Full**; charts without a position have no exit buttons.
+- **Under the top bar:** every straddle traded from the page with its quantity, sold-at and current straddle price, P&L, and the total.
+- **Top bar:** **Connect Kite** to log in (once a day), then **Kite AB1234**.
+
+Setup (Kite Connect app, redirect URL, static IP registration), how orders are sized and placed, and how positions are tracked are described in [kite/README.md](kite/README.md).
+
 ## Data and timing details
 
 - **Rate limits:** the Neo market-data endpoints reject bursts (HTTP 429), so all REST calls go out one at a time, at least 1.5 seconds apart, and are retried with backoff on 429 and 5xx errors.
@@ -291,7 +325,7 @@ It reads only market data, so it needs just the consumer key from `.env` and nev
 To run it on its own:
 
 ```sh
-.venv/bin/python -m pnf_sim              # http://127.0.0.1:8766
+.venv/bin/python -m pnf_sim              # https://127.0.0.1:8766
 .venv/bin/python -m pnf_sim --port 9001  # any other port
 ```
 
@@ -392,7 +426,7 @@ The simulator's own [README](pnf_sim/README.md) has the same details next to its
 ```sh
 .venv/bin/python -m pytest                     # Python tests (live app and simulator)
 .venv/bin/python -m pytest tests/test_engine.py::test_live_minute_bars_and_reconcile   # one test
-node --test tests/*.test.mjs                   # Point & Figure engine and simulator playback tests
+node --test tests/*.test.mjs                   # P&F engine, simulator playback and Kite P&L tests
 .venv/bin/ruff check && .venv/bin/ruff format --check
 ```
 
@@ -403,6 +437,7 @@ node --test tests/*.test.mjs                   # Point & Figure engine and simul
 | `pnf/neo.py` | Async wrapper around the blocking Neo SDK: request pacing, retries, login. |
 | `pnf/series.py` | Pure helpers: IST calendar, session filter, straddle series and VWAP, ATM rounding, expiry choices. |
 | `pnf/engine.py` | The state machine: building charts, the live feed, minute bars, refreshing, daily rollover. |
+| `pnf/tls.py` | The HTTPS certificate both servers use: created in `certs/` on first start, renewed before it expires. |
 | `pnf/app.py` | FastAPI server: the page, `POST /api/login`, `POST /api/config`, and the `/ws` update channel. |
 | `pnf/static/pnf.js` | Point & Figure construction and signal detection (the only P&F code). |
 | `pnf/static/chart.js` | Canvas chart renderer (draws only the visible area, so long histories stay fast). |
@@ -411,9 +446,10 @@ node --test tests/*.test.mjs                   # Point & Figure engine and simul
 | `pnf/static/app.js` | Page wiring: controls, server messages, panel headers. |
 | `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits) and `POST /api/simulate` (builds a run); serves the live app's static files read-only. |
 | `pnf_sim/replay.py` | Builds a simulator run: date checks, expiries offered, strikes from the start day's open, straddle series with each minute's price path, previous closes for the spot. |
+| `kite/` | Order placement and position tracking through Zerodha Kite: gateway, contracts, exit sizing, broker, endpoints and the trading UI (see [kite/README.md](kite/README.md#files)). |
 | `start.sh` | Starts the live app and the simulator together (see [Running](#running)). |
 | `pnf_sim/static/` | The simulator page (`simulator.html`, `simulator.js`, `sim.css`), its replay clock (`player.js`) and its simulated trades (`trades.js`). |
-| `tests/` | Python tests (the live engine against a fake gateway, and the simulator's run building) and JavaScript tests (the P&F engine and the simulator's replay clock). |
+| `tests/` | Python tests (the live engine against a fake gateway, the simulator's run building, and Kite trading against a fake Kite in `tests/kite_fakes.py`) and JavaScript tests (the P&F engine, the simulator's replay clock, and Kite P&L). |
 
 ### Testing the live path outside market hours
 
@@ -425,7 +461,8 @@ node --test tests/*.test.mjs                   # Point & Figure engine and simul
 - The server listens on `127.0.0.1` only, because it holds a live trading session; do not expose it to a network.
 - Credentials are read from `.env` and are never sent to the browser.
 - The TOTP is used once to log in and is not stored.
-- The app only reads market data; it never places orders.
+- The Neo session is used only for market data.
+- Orders are placed only through Kite, and only from the page's Sell and Exit buttons; the Kite access token stays on the server (owner-only `.kite-session.json`), and the order endpoints refuse requests from any other website (see [kite/README.md](kite/README.md#security)).
 
 ## Limitations
 

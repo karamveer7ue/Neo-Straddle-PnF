@@ -6,6 +6,10 @@
 # Local state written by the app
 .pnf-config.json
 .pnf-alerts.json
+.kite-session.json
+.kite-journal.json
+certs/
+relay-upload/
 logs/
 *.log
 *.csv

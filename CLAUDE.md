@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `pnf/` is a web app on top of the Kotak Neo trading SDK (`kotakneoapi` 3.0.6, imported as `neo_api_client`).
 It shows three straddle Point & Figure charts side by side for NIFTY (NSE; ATM - 200, ATM, ATM + 200) or SENSEX (BSE; ATM - 500, ATM, ATM + 500), from 1-min history plus the live WebSocket feed, with VWAP, double top buy / double bottom sell markers, and alerts (double bottom sells below VWAP only).
-User-facing documentation is in `README.md`.
+Optionally the page sells a chart's straddle and tracks/exits the positions through Zerodha Kite (`kiteconnect` 5.2.2); all of that lives in `kite/`.
+User-facing documentation is in `README.md` (Kite: `kite/README.md`).
 
 ## Commands
 
@@ -14,15 +15,15 @@ Always use the project virtualenv (Python 3.12); dependencies are pinned in `req
 
 ```sh
 ./start.sh                              # live app (8765) and simulator (8766) together; asks to restart or skip a running one (--restart / --skip)
-.venv/bin/python -m pnf                 # P&F web app on http://127.0.0.1:8765 (--port to change)
+.venv/bin/python -m pnf                 # P&F web app on https://127.0.0.1:8765 (--port to change)
 .venv/bin/python -m pytest              # Python tests (tests/test_*.py)
 .venv/bin/python -m pytest tests/test_engine.py::test_live_minute_bars_and_reconcile   # one test
 node --test tests/*.test.mjs            # P&F engine tests (JS); a bare directory argument fails on Node 22
 .venv/bin/ruff check && .venv/bin/ruff format --check   # lint/format (config in pyproject.toml, covers pnf/ and tests/)
 ```
 
-Credentials come from `.env` (template: `.env.sample`): `CONSUMER_KEY`, `MOBILE_NUMBER`, `UCC`, `MPIN`.
-`.env`, `.pnf-config.json`, `.pnf-alerts.json` and `logs/` are gitignored and must never be committed (the repo is public).
+Credentials come from `.env` (template: `.env.sample`): `CONSUMER_KEY`, `MOBILE_NUMBER`, `UCC`, `MPIN`, plus optional `KITE_API_KEY`, `KITE_API_SECRET` (empty = trading off), `KITE_PRODUCT`, `KITE_MAX_LOTS`, `KITE_ORDER_RELAY`, `KITE_RELAY_SECRET`.
+`.env`, `.pnf-config.json`, `.pnf-alerts.json`, `.kite-session.json` (Kite access token), `.kite-journal.json`, `relay-upload/` (relay with the secret), `certs/` and `logs/` are gitignored and must never be committed (the repo is public).
 
 The SDK writes its own logs to `logs/neo-api-client.log` (rotated daily).
 
@@ -50,7 +51,24 @@ The SDK writes its own logs to `logs/neo-api-client.log` (rotated daily).
 - `static/chart.js` - canvas renderer that draws only the visible viewport under a native scroller (spacer sized to the full chart), so long histories stay cheap. A signal is drawn as a solid bar over the two columns before the breakout column, in the empty row just beyond the broken level (green above the old top for a buy, red below the old bottom for a sell). VWAP (yellow, broken at session starts) and SMA (light black / grey) are both lines through column centres. Either overlay can be hidden (`setOverlays`; the choice is per browser, in `localStorage`). Axis tags (price, VWAP, SMA) are laid out by `static/axis.js` `placeTags`: priority order, each lower tag takes the nearest free slot.
 
 To exercise the live path outside market hours, run the app with a fake gateway and a shifted clock: `tests/test_engine.py` has `FakeGateway` and `tick()` helpers (full `SFeedScrip` packets with a running day volume), and `engine.now_ist` is the single clock to monkeypatch.
+Both servers are HTTPS-only (Kite redirects only to https after login) with the self-signed pair `pnf/tls.py` `ensure_cert` creates in `certs/` (gitignored; created under a file lock, since start.sh starts both servers at once); use `curl -k` against them.
 To restart the server, kill it by port (`kill $(lsof -tiTCP:8765 -sTCP:LISTEN)`): the process name is `Python`, so `pkill -f "python -m pnf"` silently misses it and the new server fails to bind.
+
+## Kite trading (`kite/`)
+
+Kept out of `pnf/`: `pnf/app.py` only calls `kite.web.make_broker()`/`install(app)`, and `pnf/static/app.js` only calls `mountTrading`/`updateTrading` (from `/kite/static/trading.js`) with the panels, built underlying, expiry and `state.live`.
+
+- `gateway.py` - `KiteGateway`: one SDK call at a time in a thread (orders on a second client with its own lock, so they never queue behind reads). Reads retry on 429/5xx/network errors. Orders (`place_autoslice_order`, MARKET, `market_protection=-1` - Kite rejects API market orders without it since April 2026) retry only on 429; any other failure that may have reached Kite raises `OutcomeUnknown` and is never resent.
+- `contracts.py` - `ContractBook` from Kite's instrument dump (NFO/BFO, mapped from `Underlying.fo_segment`), loaded once a day; lot size is per expiry. Group key `"<underlying>|<expiry iso>|<strike>"` names a straddle everywhere (server and browser).
+- `book.py` - pure: `plan_exit` sizes exits from fresh net positions minus quantity on working exit orders (a double Exit must never flip a short long), per leg and product; half = whole lots rounded down.
+- `broker.py` - `KiteBroker`: redirect login with a one-time `state` (via `redirect_params`), token saved owner-only and dropped after the 06:00 reset; Sell sends the CE then at once the PE (the user wants instant entries: no wait for fills), holding the PE back only if Kite refused the CE outright; exits read through the order client (`urgent=True`) so they never queue behind polling; exits read orders before positions and re-read while `book.positions_behind` (positions lagging the order book's fills); a session expiring mid-action is reported per leg, never raised; only contracts in the journal (ordered from here) are shown; polls positions/orders (2s market hours, 0.5s while an order is watched) and pushes `kite` state and `order` outcome messages on `/kite/ws` (its own channel, separate from `/ws`).
+- `web.py` - every endpoint requires a loopback Host and a same-origin Origin (`same_origin`): the server is localhost-only, but other sites in the browser (and DNS rebinding) must not reach the order endpoints.
+- `order_relay.py` + `relay/kite-route.php` - optional relay on a web host with a static IP (Kite checks the IP on order endpoints only): `RelayAuth`, installed as the order client's `requests` auth, reroutes only POST/PUT/DELETE `/orders...` to `<relay>?path=<path_url>` with an HMAC-SHA256 signature (`ts\nMETHOD\npath\nbody`, 60 s window). The PHP relays only `/orders/<variety>[/<id>]`, returns Kite's reply verbatim, and answers its own errors in Kite's error format (403 PermissionException = not sent; 502 NetworkException = outcome unknown). It must keep `display_errors` off: a PHP 8.5 deprecation notice once corrupted the JSON. `tests/test_order_relay.py` runs the real PHP (built-in server, `KITE_ROUTE_UPSTREAM` pointing at a fake Kite); `python -m kite.order_relay php` writes the upload copy with the secret into gitignored `relay-upload/`.
+- `static/trading.js` - Sell and the exits act on the first click, with no confirmation (the user's choice). `claim()` refuses a second action on a chart while one is in flight or within `REPEAT_GUARD_MS`, and Enter ignores key auto-repeat: a double-click or held Enter once sent repeated sells, and a double Exit 50% would exit 75%.
+- `static/positions.js` - live P&L is Kite's `pnl` re-priced exactly: `pnl + quantity x multiplier x (live - lastPrice)`, with the Neo feed's leg LTP for straddles on screen.
+
+Tests use `tests/kite_fakes.py` `FakeKite` (instruments, instant or held fills, Kite's netting and P&L formula) and must monkeypatch `kite.broker.SESSION_FILE`/`JOURNAL_FILE` (the `files` fixture in `tests/test_kite.py` does).
+The real Kite API cannot be exercised here; the browser flow was verified against `FakeKite` synced to a fake live Neo feed.
 
 ## SDK and API behaviour worth knowing
 

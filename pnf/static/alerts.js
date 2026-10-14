@@ -79,30 +79,47 @@ export function raiseAlert({ type, title, detail }) {
   const withSound = soundEnabled();
   // Until the page may play sound, notes would queue up and all sound at the first click.
   if (withSound && audioReady()) playSignal(type);
-
-  const box = document.getElementById('toasts');
-  const toast = document.createElement('div');
-  toast.className = `toast ${type}`;
-  toast.setAttribute('role', 'alert');
   const muted = withSound && !audioReady();
-  toast.innerHTML = `
-    <div class="toast-icon" aria-hidden="true">${type === 'buy' ? '▲' : '▼'}</div>
-    <div class="toast-body">
-      <b></b>
-      <span class="toast-detail"></span>
-      ${muted ? '<span class="toast-hint">Click anywhere on the page to enable alert sounds.</span>' : ''}
-    </div>
-    <button type="button" class="toast-close" aria-label="Dismiss">×</button>
-    <i class="toast-timer" aria-hidden="true"></i>`;
-  toast.querySelector('b').textContent = title;
-  toast.querySelector('.toast-detail').textContent = detail;
-  autoDismiss(toast, TOAST_LIFETIME_MS);
-  box.prepend(toast);
-  while (box.children.length > MAX_TOASTS) box.lastElementChild.remove();
+  showToast({
+    kind: type,
+    icon: type === 'buy' ? '\u25b2' : '\u25bc',
+    title,
+    detail,
+    hint: muted ? 'Click anywhere on the page to enable alert sounds.' : '',
+  });
 
   if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
     new Notification(title, { body: detail, tag: `${type}:${detail}` });
   }
+}
+
+/**
+ * Show a toast (bottom-left; it closes itself, hovering keeps it open).
+ * @param {{kind: string, icon: string, title: string, detail: string, hint?: string}} toast
+ *   `kind` is a CSS class: buy and sell here, others where the toast is styled.
+ */
+export function showToast({ kind, icon, title, detail, hint = '' }) {
+  const box = document.getElementById('toasts');
+  const toast = document.createElement('div');
+  toast.className = `toast ${kind}`;
+  toast.setAttribute('role', 'alert');
+  toast.innerHTML = `
+    <div class="toast-icon" aria-hidden="true"></div>
+    <div class="toast-body">
+      <b></b>
+      <span class="toast-detail"></span>
+      ${hint ? '<span class="toast-hint"></span>' : ''}
+    </div>
+    <button type="button" class="toast-close" aria-label="Dismiss">×</button>
+    <i class="toast-timer" aria-hidden="true"></i>`;
+  toast.querySelector('.toast-icon').textContent = icon;
+  toast.querySelector('b').textContent = title;
+  toast.querySelector('.toast-detail').textContent = detail;
+  if (hint) toast.querySelector('.toast-hint').textContent = hint;
+  autoDismiss(toast, TOAST_LIFETIME_MS);
+  box.prepend(toast);
+  while (box.children.length > MAX_TOASTS) box.lastElementChild.remove();
+  return toast;
 }
 
 /**

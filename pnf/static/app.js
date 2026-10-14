@@ -1,6 +1,7 @@
 import { raiseAlert, requestNotifications, setSoundEnabled, soundEnabled } from './alerts.js';
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from './chart.js';
 import { alertWanted, istDay } from './pnf.js';
+import { mountTrading, updateTrading } from '/kite/static/trading.js';
 
 const MAX_DAYS = 15;
 
@@ -379,6 +380,17 @@ document.addEventListener('click', (e) => {
 
 function renderPanels() {
   for (const entry of state.panels.values()) renderPanelHead(entry);
+  renderTrading();
+}
+
+/** Tell the Kite trading UI (order bars, positions strip) what the charts show. */
+function renderTrading() {
+  updateTrading({
+    underlying: builtKey(),
+    expiry: state.config?.expiry ?? null,
+    panels: [...state.panels.values()].map(({ root, def }) => ({ root, def })),
+    live: state.live,
+  });
 }
 
 // ---------------- Top bar ----------------
@@ -762,4 +774,5 @@ els.login.addEventListener('submit', async (e) => {
   }
 });
 
+mountTrading({ topbar: document.querySelector('.topbar'), before: document.querySelector('.feed'), banner: els.banner });
 connect();

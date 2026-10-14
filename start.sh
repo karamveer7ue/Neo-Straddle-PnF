@@ -113,8 +113,8 @@ if [ -n "$pid" ]; then
   fi
 fi
 
-[ "$START_LIVE" -eq 0 ] && echo "Live app:  http://127.0.0.1:$LIVE_PORT (already running, left alone)"
-[ "$START_SIM" -eq 0 ] && echo "Simulator: http://127.0.0.1:$SIM_PORT (already running, left alone)"
+[ "$START_LIVE" -eq 0 ] && echo "Live app:  https://127.0.0.1:$LIVE_PORT (already running, left alone)"
+[ "$START_SIM" -eq 0 ] && echo "Simulator: https://127.0.0.1:$SIM_PORT (already running, left alone)"
 if [ "$START_LIVE" -eq 0 ] && [ "$START_SIM" -eq 0 ]; then
   echo "Nothing to start."
   exit 0
@@ -129,12 +129,12 @@ PIDS=()
 if [ "$START_LIVE" -eq 1 ]; then
   "$PYTHON" -m pnf --port "$LIVE_PORT" > >(tag "[live]") 2>&1 &
   PIDS+=($!)
-  echo "Live app:  http://127.0.0.1:$LIVE_PORT"
+  echo "Live app:  https://127.0.0.1:$LIVE_PORT"
 fi
 if [ "$START_SIM" -eq 1 ]; then
   "$PYTHON" -m pnf_sim --port "$SIM_PORT" > >(tag "[sim] ") 2>&1 &
   PIDS+=($!)
-  echo "Simulator: http://127.0.0.1:$SIM_PORT"
+  echo "Simulator: https://127.0.0.1:$SIM_PORT"
 fi
 
 stop() {

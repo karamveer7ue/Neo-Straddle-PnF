@@ -12,7 +12,7 @@ See [Running](../README.md#running) in the main README for its options.
 To run the simulator on its own:
 
 ```sh
-.venv/bin/python -m pnf_sim              # http://127.0.0.1:8766
+.venv/bin/python -m pnf_sim              # https://127.0.0.1:8766
 .venv/bin/python -m pnf_sim --port 9001  # any other port
 ```
 

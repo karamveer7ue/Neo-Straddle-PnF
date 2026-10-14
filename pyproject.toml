@@ -1,7 +1,7 @@
 [tool.ruff]
 line-length = 110
 target-version = "py312"
-include = ["pnf/**/*.py", "tests/**/*.py"]
+include = ["pnf/**/*.py", "pnf_sim/**/*.py", "kite/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "RUF"]

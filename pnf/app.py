@@ -12,6 +12,8 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+import kite.web
+
 from .engine import KEEP, Engine
 from .neo import NeoError, NeoGateway
 from .series import DEFAULT_EXPIRY_ROLE, DEFAULT_UNDERLYING, MAX_DAYS, MIN_DAYS, UNDERLYINGS
@@ -38,14 +40,18 @@ def make_engine() -> Engine:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.engine = make_engine()
+    app.state.engine = make_engine()  # loads .env, which the Kite broker reads too
+    app.state.broker = kite.web.make_broker()
     app.state.engine.start()
+    app.state.broker.start()
     yield
+    await app.state.broker.stop()
     await app.state.engine.stop()
 
 
 app = FastAPI(title="NIFTY straddle P&F", lifespan=lifespan)
 app.mount("/static", RevalidatingStaticFiles(directory=STATIC), name="static")
+kite.web.install(app)  # order placement and positions through Zerodha Kite
 
 
 class LoginBody(BaseModel):

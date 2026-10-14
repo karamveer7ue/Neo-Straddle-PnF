@@ -2,7 +2,10 @@ kotakneoapi==3.0.6
 fastapi==0.143.0
 uvicorn[standard]==0.54.0
 python-dotenv==1.2.3
+kiteconnect==5.2.2
+cryptography==50.0.2  # the HTTPS certificate (pnf/tls.py)
 
 # dev
 pytest==9.1.1
+httpx2==2.13.1  # FastAPI's TestClient
 ruff==0.17.0
