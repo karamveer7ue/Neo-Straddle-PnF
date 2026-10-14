@@ -5,7 +5,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -67,7 +67,7 @@ class ConfigBody(BaseModel):
     expiry: Literal["week1", "week2", "month1", "month2"] = DEFAULT_EXPIRY_ROLE
 
 
-class AlertBody(BaseModel):
+class SignalAlert(BaseModel):
     key: str = Field(min_length=1, max_length=200)  # identifies the signal, for de-duplication
     type: Literal["buy", "sell"]
     underlying: Literal["NIFTY", "SENSEX"]
@@ -77,6 +77,15 @@ class AlertBody(BaseModel):
     level: float  # the broken top (buy) or bottom (sell)
     price: float  # the breakout box
     barTs: int  # the 1-minute bar that confirmed the signal
+
+
+class ErrorAlert(BaseModel):
+    """An error a page showed (e.g. a Kite order not placed or rejected)."""
+
+    key: str = Field(min_length=1, max_length=200)  # shared by pages showing the same error
+    type: Literal["error"]
+    title: str = Field(min_length=1, max_length=200)
+    detail: str = Field(default="", max_length=600)
 
 
 @app.get("/")
@@ -107,7 +116,7 @@ async def configure(body: ConfigBody):
 
 
 @app.post("/api/alerts")
-async def log_alert(body: AlertBody):
+async def log_alert(body: Annotated[SignalAlert | ErrorAlert, Field(discriminator="type")]):
     return {"logged": app.state.engine.log_alert(body.model_dump())}
 
 

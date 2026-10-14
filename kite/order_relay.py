@@ -150,8 +150,16 @@ def main(argv: list[str]) -> int:
             print(exc, file=sys.stderr)
             return 1
         skew = int(time.time()) - int(info.get("time", time.time()))
+        version = info.get("version", 4)
         print(f"Relay OK: {url}")
-        print(f"Its outgoing IP (register this in the Kite developer console): {info.get('ip') or 'unknown'}")
+        if info.get("ip"):
+            print(f"Kite sees orders from IPv{version} {info['ip']}: register this one with Kite.")
+        else:
+            print(
+                f"Warning: the relay has no IPv{version} address; change KITE_IP_VERSION in kite-route.php."
+            )
+        if info.get("otherIp"):
+            print(f"(Its IPv{6 if version == 4 else 4} address {info['otherIp']} is not used for Kite.)")
         if abs(skew) > 20:
             print(f"Warning: this machine's clock is {skew:+d} s off the relay's (limit 60 s).")
         return 0

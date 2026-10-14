@@ -257,7 +257,7 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | **VWAP / SMA 10** | Show or hide each overlay on all three charts; both, either or none (remembered by the browser). |
 | **- / Fit / +** | Smaller boxes, fit the boxes to the panel height, bigger boxes. |
 | **Bell** | Turns alert sounds on or off (remembered by the browser). |
-| **Alert log** | Opens the last 30 alerts; the badge counts new ones. |
+| **Alert log** | Opens the last 30 alerts and errors; the badge counts new ones. |
 | **Status pill** | **History only**, **Connecting**, **Reconnecting** or **Live**. |
 
 Inside each panel:
@@ -282,6 +282,7 @@ Each alert gives you:
 - a system notification when the tab is in the background, if you have allowed notifications (the browser asks when you go live).
 
 **Alert log:** the list button next to the bell opens the last 30 alerts, newest first, with the index, chart, strike, expiry, the level broken, the breakout price and the bar time.
+Errors shown on the page (for example a Kite order not placed or rejected) are saved there too, marked with an amber **!**, with the straddle, the reason and the time.
 A red badge on the button counts alerts you have not seen yet; opening the log clears it.
 The log is kept by the server in `.pnf-alerts.json` (gitignored), so it survives page reloads and server restarts, and an alert seen by several open tabs is logged once.
 Alerts are detected in the browser, so they are only logged while at least one page is open.

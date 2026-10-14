@@ -236,7 +236,8 @@ class Engine:
     # ---------------- Alert log ----------------
 
     def log_alert(self, alert: dict) -> bool:
-        """Record a signal alert raised in a browser; returns False for a duplicate.
+        """Record an alert raised in a browser - a signal, or an error a page showed
+        (type "error": title and detail) - and return False for a duplicate.
 
         Every open page raises the same alert, so entries are deduplicated by
         their key. Newest first, capped at ALERTS_KEPT, saved to disk.

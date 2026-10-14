@@ -17,6 +17,7 @@ Charts and prices still come from Kotak Neo; Kite is used only to place orders a
   A position on a strike that is no longer on screen (e.g. after the ATM moved, or on another expiry) gets its own Exit buttons on its card, so it can always be closed from the page.
 - **In the top bar:** **Connect Kite**, or **Kite AB1234** once connected (click it to disconnect).
 
+Every error toast (an order not placed, rejected or left working) is also saved in the alert log next to the bell, so it can be read later.
 Each order's outcome appears as a toast: "Sold NIFTY 22,300 (13 Oct) straddle - CE 650 @ 100.80 · PE 650 @ 51.20", or the rejection reason from Kite (e.g. insufficient margin).
 
 ## Setup
@@ -96,6 +97,8 @@ Setting it up:
    ```
 
    Register **that** IP in the Kite developer console: it is the address the host's requests leave from, which can differ from the IP your domain points to.
+   A host with both IPv4 and IPv6 (Hostinger has both) could reach Kite over either, so the relay always uses one: IPv4, or IPv6 if you set `KITE_IP_VERSION = 6` in `kite-route.php`.
+   `check` shows the address of that version (and the other, unused one); an "IP (2a02:...) is not allowed" error means Kite saw an address you have not registered.
 5. Restart the app (`./start.sh --restart`).
 
 **Shared hosting and Kite's IP rules:** on shared hosting (such as Hostinger's web hosting plans), the outgoing IP is shared with the other sites on the same server.

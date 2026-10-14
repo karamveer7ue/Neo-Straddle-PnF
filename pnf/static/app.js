@@ -336,16 +336,23 @@ function renderAlertLog() {
   els.alertLogList.replaceChildren(...state.alerts.map((a) => {
     const li = document.createElement('li');
     li.className = `${a.type}${a.loggedAt > seenAtOpen ? ' unseen' : ''}`;
+    const isError = a.type === 'error'; // an error a page showed (e.g. a Kite order not placed)
     const icon = document.createElement('span');
     icon.className = 'icon';
-    icon.textContent = a.type === 'buy' ? '\u25b2' : '\u25bc';
+    icon.textContent = isError ? '!' : a.type === 'buy' ? '\u25b2' : '\u25bc';
     const title = document.createElement('b');
-    title.textContent = `${SIGNAL_NAMES[a.type]} \u00b7 ${offsetLabel(a.offset)}`;
+    title.textContent = isError ? a.title : `${SIGNAL_NAMES[a.type]} \u00b7 ${offsetLabel(a.offset)}`;
+    const when = isError ? a.loggedAt : a.barTs;
     const time = document.createElement('time');
-    time.dateTime = new Date(a.barTs * 1000).toISOString();
-    time.textContent = `${fmtDay(a.barTs)} ${fmtTime(a.barTs)}`;
+    time.dateTime = new Date(when * 1000).toISOString();
+    time.textContent = `${fmtDay(when)} ${fmtTime(when)}`;
     const detail = document.createElement('span');
     detail.className = 'detail';
+    if (isError) {
+      detail.textContent = a.detail;
+      li.append(icon, title, time, detail);
+      return li;
+    }
     const expiry = a.expiry
       ? ` (${new Date(`${a.expiry}T00:00:00+05:30`).toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' })})`
       : '';

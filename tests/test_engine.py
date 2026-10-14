@@ -674,3 +674,25 @@ def test_gateway_holds_the_lock_until_a_cancelled_call_finishes_even_if_cancelle
         return await second
 
     assert asyncio.run(scenario()) == {"overlapped": False}
+
+
+def test_errors_shown_on_a_page_go_into_the_alert_log(clock, make_engine):
+    from fastapi.testclient import TestClient
+
+    import pnf.app
+
+    eng = make_engine()
+    pnf.app.app.state.engine = eng  # no lifespan: the endpoint only needs the engine
+    http = TestClient(pnf.app.app)
+    error = {
+        "type": "error",
+        "key": "order:42:REJECTED",
+        "title": "NIFTY 22,300: CE sell rejected",
+        "detail": "Margin",
+    }
+    assert http.post("/api/alerts", json=error).json() == {"logged": True}
+    assert http.post("/api/alerts", json=error).json() == {"logged": False}  # another tab, same error
+    assert eng.alerts[0] == {**error, "loggedAt": int(clock["t"].timestamp())}
+    # An error entry has no signal fields, and a signal still needs them.
+    assert http.post("/api/alerts", json={"type": "error", "key": "x"}).status_code == 422
+    assert http.post("/api/alerts", json={**error, "type": "sell"}).status_code == 422

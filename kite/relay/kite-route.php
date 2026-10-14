@@ -11,7 +11,7 @@
  *
  * What it accepts, and nothing else:
  *   POST|PUT|DELETE ?path=/orders/<variety>[/<order_id>]   place, modify, cancel an order
- *   GET ?path=whoami                                       this server's outgoing IP
+ *   GET ?path=whoami                                       this server's outgoing IPs
  * Every request must be signed by the app with the shared secret:
  *   X-Relay-Timestamp: unix seconds (accepted within 60 s of this server's clock)
  *   X-Relay-Signature: hex HMAC-SHA256 of "<timestamp>\n<METHOD>\n<path>\n<body>"
@@ -35,6 +35,10 @@ ini_set('log_errors', '1');
 const RELAY_SECRET = 'PASTE-KITE_RELAY_SECRET-FROM-.env-HERE';
 const KITE_API = 'https://api.kite.trade';
 const MAX_CLOCK_SKEW = 60;  // seconds
+// The IP version used to reach Kite: 4 or 6. A host with both (Hostinger has both) would
+// otherwise pick one by itself, and Kite refuses orders from the address not registered.
+// `python -m kite.order_relay check` shows the address of this version: register that one.
+const KITE_IP_VERSION = 4;
 const ORDER_PATH = '#^/orders/(regular|amo|co|iceberg|auction)(/[A-Za-z0-9]+)?$#';
 
 function reply(int $status, string $body, string $contentType = 'application/json'): void
@@ -76,10 +80,20 @@ function request_headers(): array
     return $headers;
 }
 
-function outgoing_ip(): string
+function ip_resolve(int $version): int
 {
-    $ch = curl_init('https://api.ipify.org');
-    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10]);
+    return $version === 6 ? CURL_IPRESOLVE_V6 : CURL_IPRESOLVE_V4;
+}
+
+/** This server's outgoing address of one IP version ('' if it has none). */
+function outgoing_ip(int $version): string
+{
+    $ch = curl_init($version === 6 ? 'https://api6.ipify.org' : 'https://api.ipify.org');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 10,
+        CURLOPT_IPRESOLVE => ip_resolve($version),
+    ]);
     $ip = curl_exec($ch);
     $ok = $ip !== false && curl_getinfo($ch, CURLINFO_HTTP_CODE) === 200;
     return $ok ? trim((string) $ip) : '';
@@ -107,7 +121,13 @@ if (!hash_equals($expected, $signature)) {
 }
 
 if ($method === 'GET' && $target === 'whoami') {
-    reply(200, json_encode(['status' => 'success', 'data' => ['ip' => outgoing_ip(), 'time' => time()]]));
+    $other = KITE_IP_VERSION === 6 ? 4 : 6;
+    reply(200, json_encode(['status' => 'success', 'data' => [
+        'ip' => outgoing_ip(KITE_IP_VERSION),  // the address Kite sees
+        'version' => KITE_IP_VERSION,
+        'otherIp' => outgoing_ip($other),  // not used for Kite
+        'time' => time(),
+    ]]));
 }
 
 if (!in_array($method, ['POST', 'PUT', 'DELETE'], true)) {
@@ -144,6 +164,7 @@ curl_setopt_array($ch, [
     CURLOPT_TIMEOUT => 10,
     CURLOPT_SSL_VERIFYPEER => true,
     CURLOPT_SSL_VERIFYHOST => 2,
+    CURLOPT_IPRESOLVE => ip_resolve(KITE_IP_VERSION),
     CURLOPT_HEADERFUNCTION => function ($ch, string $line) use (&$contentType): int {
         if (stripos($line, 'content-type:') === 0) {
             $contentType = trim(substr($line, 13));

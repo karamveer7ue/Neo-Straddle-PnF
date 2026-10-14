@@ -663,6 +663,8 @@ button, input, select { font: inherit; color: inherit; }
 .alert-log-list .icon { grid-row: span 2; font-size: 13px; line-height: 18px; }
 .alert-log-list .buy .icon, .alert-log-list .buy b { color: var(--x); }
 .alert-log-list .sell .icon, .alert-log-list .sell b { color: var(--o); }
+.alert-log-list .error .icon, .alert-log-list .error b { color: var(--warn); }
+.alert-log-list .error .icon { font-weight: 800; text-align: center; }
 .alert-log-list b { font-size: 13px; font-weight: 650; }
 .alert-log-list time { color: var(--text-3); font-family: var(--font-mono); font-size: 11.5px; white-space: nowrap; }
 .alert-log-list .detail { grid-column: 2 / 4; color: var(--text-2); font-family: var(--font-mono); font-size: 12px; }

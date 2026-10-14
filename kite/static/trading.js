@@ -107,18 +107,18 @@ function describeGroup(key) {
   return `${underlying} ${fmtStrike(Number(strike))} (${fmtExpiry(expiry)})`;
 }
 
-const BATCH_MS = 1500; // the legs of one action fill within a moment (the PE waits for the CE): one toast
+const BATCH_MS = 1500; // the legs of one action fill within a moment: one toast
 const batches = new Map(); // "<group>|<side>" -> {events, timer}
 
 function orderToast(o) {
   if (o.status !== 'COMPLETE') {
     const filled = o.filled ? ` (${fmtQty(o.filled)} of ${fmtQty(o.quantity)} filled @ ${fmtPrice(o.averagePrice)})` : '';
-    showToast({
-      kind: 'error',
-      icon: '!',
-      title: `${describeGroup(o.group)} ${o.kind} ${o.side === 'SELL' ? 'sell' : 'buy'} ${o.status.toLowerCase()}${filled}`,
-      detail: o.message || `${o.tradingsymbol}: order ${o.orderId}`,
-    });
+    errorToast(
+      `${o.kind} ${o.side === 'SELL' ? 'sell' : 'buy'} ${o.status.toLowerCase()}${filled}`,
+      o.message || `${o.tradingsymbol}: order ${o.orderId}`,
+      // Every open page gets this outcome: one key, so the log keeps it once.
+      { group: o.group, key: `order:${o.orderId}:${o.status}` },
+    );
     return;
   }
   const key = `${o.group}|${o.side}`;
@@ -139,17 +139,27 @@ function orderToast(o) {
   batches.set(key, batch);
 }
 
-function errorToast(title, detail) {
-  showToast({ kind: 'error', icon: '!', title, detail });
+/**
+ * Show an error toast and save it in the alert log (with the signal alerts).
+ * @param {{group?: string, key?: string}} [about] the straddle it concerns; a key shared by
+ *   every page that shows the same error (others are unique: only the page that hit it logs it)
+ */
+function errorToast(title, detail, { group, key } = {}) {
+  const full = group ? `${describeGroup(group)}: ${title}` : title;
+  showToast({ kind: 'error', icon: '!', title: full, detail });
+  const id = key ?? `error:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+  post('/api/alerts', { type: 'error', key: id.slice(0, 200), title: full.slice(0, 200), detail: String(detail ?? '').slice(0, 600) })
+    .catch(() => {}); // logging must never get in the way of the toast
 }
 
 /** Report the legs that were not placed (or held back), and any warnings; placed legs report when they fill. */
 function reportPlacement(action, res) {
+  const about = { group: res.group };
   for (const r of res.results.filter((x) => !x.ok)) {
-    if (r.held) errorToast(`${r.kind} not sent`, r.error);
-    else errorToast(`${r.kind} ${action} ${r.unknown ? 'outcome unknown' : 'not placed'}`, r.error);
+    if (r.held) errorToast(`${r.kind} not sent`, r.error, about);
+    else errorToast(`${r.kind} ${action} ${r.unknown ? 'outcome unknown' : 'not placed'}`, r.error, about);
   }
-  for (const w of res.warnings ?? []) errorToast('Order still working', w);
+  for (const w of res.warnings ?? []) errorToast('Order still working', w, about);
 }
 
 // ---------------- Actions ----------------
@@ -178,7 +188,7 @@ async function sell(target, input) {
     storeQty(target.underlying, qty);
     reportPlacement('sell', res);
   } catch (err) {
-    errorToast('Sell not placed', err.message);
+    errorToast('Sell not placed', err.message, { group: target.key });
   } finally {
     k.busy.delete(target.key);
     render();
@@ -191,7 +201,7 @@ async function exit(key, fraction) {
   try {
     reportPlacement('buy', await post('/api/kite/exit', { group: key, fraction }));
   } catch (err) {
-    errorToast(fraction < 1 ? 'Exit 50% not placed' : 'Exit not placed', err.message);
+    errorToast(fraction < 1 ? 'Exit 50% not placed' : 'Exit not placed', err.message, { group: key });
   } finally {
     k.busy.delete(key);
     render();
