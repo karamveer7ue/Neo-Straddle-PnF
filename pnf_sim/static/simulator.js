@@ -7,6 +7,7 @@
 import { raiseAlert, setSoundEnabled, soundEnabled } from '/static/alerts.js';
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from '/static/chart.js';
 import { alertWanted } from '/static/pnf.js';
+import { loadOverlays, mountMenu, saveOverlays } from '/static/view.js';
 import { Player, SPEEDS } from './player.js';
 import { LOTS_PER_SELL, ShortStraddleTrade } from './trades.js';
 
@@ -33,6 +34,8 @@ const els = {
   spotStat: $('spot-stat'),
   spotChg: $('spot-chg'),
   overlays: $('overlays'),
+  viewBtn: $('view-btn'),
+  viewPanel: $('view-panel'),
   zoomIn: $('zoom-in'),
   zoomOut: $('zoom-out'),
   zoomFit: $('zoom-fit'),
@@ -48,7 +51,6 @@ const els = {
 const SIGNAL_NAMES = { buy: 'Double top buy', sell: 'Double bottom sell' };
 const FLASH_MS = 8000;
 const SPEED_KEY = 'pnf.sim.speed';
-const OVERLAYS_KEY = 'pnf.overlays'; // shared with the live page
 
 const state = {
   underlying: 'NIFTY',
@@ -61,7 +63,7 @@ const state = {
   panels: new Map(), // chart key -> {root, panel, def}
   player: null,
   speed: readStored(SPEED_KEY, 1, (v) => SPEEDS.includes(v)),
-  overlays: readOverlays(),
+  overlays: loadOverlays(),
   cellOverride: null,
   alerted: new Set(),
   started: false, // Play pressed at least once since the run loaded
@@ -88,11 +90,6 @@ function store(key, value) {
   } catch {
     // storage unavailable: the choice lasts for this page only
   }
-}
-
-function readOverlays() {
-  return readStored(OVERLAYS_KEY, { vwap: true, sma: true },
-    (v) => v && typeof v.vwap === 'boolean' && typeof v.sma === 'boolean');
 }
 
 const signed = (v, digits = 2) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}`;
@@ -709,17 +706,19 @@ document.addEventListener('keydown', (e) => {
 
 // ---------------- Overlays, zoom, sound ----------------
 
+mountMenu(els.viewBtn, els.viewPanel);
+
 function renderOverlayToggles() {
-  for (const btn of els.overlays.querySelectorAll('button')) {
-    btn.setAttribute('aria-pressed', String(state.overlays[btn.dataset.overlay]));
+  for (const box of els.overlays.querySelectorAll('input[data-overlay]')) {
+    box.checked = state.overlays[box.dataset.overlay];
   }
 }
 
-els.overlays.addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-overlay]');
-  if (!btn) return;
-  state.overlays = { ...state.overlays, [btn.dataset.overlay]: !state.overlays[btn.dataset.overlay] };
-  store(OVERLAYS_KEY, state.overlays);
+els.overlays.addEventListener('change', (e) => {
+  const box = e.target.closest('input[data-overlay]');
+  if (!box) return;
+  state.overlays = { ...state.overlays, [box.dataset.overlay]: box.checked };
+  saveOverlays(state.overlays);
   for (const entry of state.panels.values()) {
     entry.panel.setOverlays(state.overlays);
     renderPanelHead(entry);

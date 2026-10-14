@@ -42,22 +42,39 @@
       <button type="button" class="chip" id="atm-auto" aria-pressed="true" title="Use the strike nearest to today's NIFTY open">
         Auto
       </button>
-      <label class="field">
-        <span>Days</span>
-        <select id="days"></select>
-      </label>
       <button type="submit" class="btn primary" id="apply" hidden>Apply</button>
     </form>
 
-    <div class="segmented" id="overlays" role="group" aria-label="Overlays">
-      <button type="button" data-overlay="vwap" aria-pressed="true" title="Intraday VWAP of the straddle: CE + PE price weighted by CE + PE volume since 09:15">VWAP</button>
-      <button type="button" data-overlay="sma" aria-pressed="true" title="Simple moving average of the last 10 column midpoints">SMA 10</button>
-    </div>
-
-    <div class="zoom" role="group" aria-label="Zoom">
-      <button type="button" class="icon-btn" id="zoom-out" title="Smaller boxes">&minus;</button>
-      <button type="button" class="icon-btn fit" id="zoom-fit" title="Fit boxes to height">Fit</button>
-      <button type="button" class="icon-btn" id="zoom-in" title="Bigger boxes">+</button>
+    <div class="view-menu">
+      <button type="button" class="btn view-btn" id="view-btn" aria-haspopup="true" aria-expanded="false" aria-controls="view-panel" title="Overlays, box size and days of history">
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>
+        </svg>
+        View
+        <svg class="caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="view-panel" id="view-panel" role="group" aria-label="View" hidden>
+        <div class="view-overlays" id="overlays">
+          <label class="view-check" title="Intraday VWAP of the straddle: CE + PE price weighted by CE + PE volume since 09:15">
+            <input type="checkbox" data-overlay="vwap"><span>VWAP</span><i class="swatch vwap" aria-hidden="true"></i>
+          </label>
+          <label class="view-check" title="Simple moving average of the last 10 column midpoints">
+            <input type="checkbox" data-overlay="sma"><span>SMA 10</span><i class="swatch sma" aria-hidden="true"></i>
+          </label>
+        </div>
+        <div class="view-row">
+          <span class="view-label" id="zoom-label">Box size</span>
+          <div class="zoom" role="group" aria-labelledby="zoom-label">
+            <button type="button" class="icon-btn" id="zoom-out" title="Smaller boxes">&minus;</button>
+            <button type="button" class="icon-btn fit" id="zoom-fit" title="Fit boxes to height">Fit</button>
+            <button type="button" class="icon-btn" id="zoom-in" title="Bigger boxes">+</button>
+          </div>
+        </div>
+        <div class="view-row">
+          <label class="view-label" for="days">Days</label>
+          <select class="view-select" id="days" title="Trading sessions of history"></select>
+        </div>
+      </div>
     </div>
 
     <div class="zoom alert-tools" role="group" aria-label="Alerts">

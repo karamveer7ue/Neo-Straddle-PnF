@@ -37,7 +37,7 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - **Expiry picker:** upcoming weekly, next weekly, this month's monthly and next month's monthly.
 - **History window:** 1 to 15 trading sessions.
 - **Live updates:** after a TOTP login on the page, prices stream in and a new 1-minute bar closes every minute; boxes from the minute still forming are drawn faded.
-- **VWAP and SMA 10:** the straddle's intraday VWAP (yellow) and a 10-column simple moving average (light black; soft grey in dark mode), each switchable on or off, also shown in each panel header and on the price axis.
+- **VWAP and SMA 10:** the straddle's intraday VWAP (yellow) and a 10-column simple moving average (light black; soft grey in dark mode), each switchable on or off in the **View** menu, also shown in each panel header and on the price axis.
 - **Signals:** double top buy and double bottom sell are marked on the charts.
   A new double bottom sell with the straddle below its VWAP raises a toast, a panel flash, a chime and (when the tab is in the background) a system notification; double top buys, and sells at or above VWAP, are marked only.
 - **Trading through Kite (optional):** a quantity field and Sell button under each chart, live P&L for the positions taken, and Exit 50% / Exit Full on the charts holding one.
@@ -253,9 +253,10 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | **Expiry** | Switches all three charts to another contract. |
 | **ATM** | Type a strike (a multiple of 50 for NIFTY, 100 for SENSEX) and press Enter or **Apply**. Esc discards the edit. |
 | **Auto** | Goes back to the ATM from today's index open. Hover it to see the open and the strike it gives. |
-| **Days** | How many trading sessions of history to show (1 to 15). |
-| **VWAP / SMA 10** | Show or hide each overlay on all three charts; both, either or none (remembered by the browser). |
-| **- / Fit / +** | Smaller boxes, fit the boxes to the panel height, bigger boxes. |
+| **View** | Opens a menu with the chart settings below; Esc or a click elsewhere closes it. |
+| **View > VWAP / SMA 10** | Show or hide each overlay on all three charts; VWAP is on and SMA 10 off until you change them (remembered by the browser). |
+| **View > Box size** | **-** smaller boxes, **Fit** fits the boxes to the panel height, **+** bigger boxes. |
+| **View > Days** | How many trading sessions of history to show (1 to 15). |
 | **Bell** | Turns alert sounds on or off (remembered by the browser). |
 | **Alert log** | Opens the last 30 alerts and errors; the badge counts new ones. |
 | **Status pill** | **History only**, **Connecting**, **Reconnecting** or **Live**. |
@@ -359,7 +360,7 @@ Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY`
 | **Timeline** | Drag to jump to any minute; the left and right arrow keys step exactly one minute (also while the timeline has focus). The thin bar under it shows the time left until the current minute completes. |
 | **Clock** | The simulated time, to the second, and the minute count (for example, "minute 296 of 375"). |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
-| **VWAP / SMA 10, zoom, bell** | The same as on the live page; the VWAP/SMA choice is shared with it. |
+| **View (VWAP / SMA 10, box size), bell** | The same as on the live page; the simulator remembers its own VWAP/SMA choice. |
 
 Speeds:
 

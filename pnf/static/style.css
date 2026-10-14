@@ -130,10 +130,6 @@ button, input, select { font: inherit; color: inherit; }
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
-/* Overlay toggles are independent, each shown in its line colour when on. */
-#overlays button[data-overlay="vwap"][aria-pressed="true"] { color: var(--vwap); }
-#overlays button[data-overlay="sma"][aria-pressed="true"] { color: var(--sma); }
-
 /* Spot and near-month future, stacked so they share one slot in the top bar */
 .stats {
   display: grid;
@@ -247,6 +243,105 @@ button, input, select { font: inherit; color: inherit; }
 .icon-btn:last-child { border-radius: 0 6px 6px 0; }
 .icon-btn.fit { width: auto; padding: 0 9px; font-size: 12px; }
 .icon-btn.fit[aria-pressed="true"] { color: var(--accent); }
+
+/* View menu: overlays, box size and days behind one button */
+.view-menu { position: relative; }
+
+.view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px 0 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.view-btn:hover, .view-btn[aria-expanded="true"] { color: var(--text-1); }
+.view-btn[aria-expanded="true"] { border-color: var(--accent); }
+.view-btn .caret { color: var(--text-3); transition: transform 0.15s; }
+.view-btn[aria-expanded="true"] .caret { transform: rotate(180deg); }
+
+.view-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 210px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.32);
+}
+
+.view-panel[hidden] { display: none; }
+.view-panel.align-end { left: auto; right: 0; }
+
+.view-overlays {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.view-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px;
+  margin: 0 -4px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.view-check:hover { background: var(--surface-2); }
+.view-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.view-check span { flex: 1; }
+
+/* A sample of the line each overlay draws */
+.swatch { width: 18px; height: 3px; border-radius: 2px; }
+.swatch.vwap { background: var(--vwap); }
+.swatch.sma { background: var(--sma); }
+.view-check input:not(:checked) ~ .swatch { opacity: 0.35; }
+
+.view-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.view-label {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.view-select {
+  height: 30px;
+  min-width: 64px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  cursor: pointer;
+}
+
+.view-select:hover { border-color: var(--text-3); }
+.view-select:focus-visible { border-color: var(--accent); }
 
 .alert-tools .icon-btn {
   position: relative;

@@ -1,6 +1,7 @@
 import { raiseAlert, requestNotifications, setSoundEnabled, soundEnabled } from './alerts.js';
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from './chart.js';
 import { alertWanted, istDay } from './pnf.js';
+import { loadOverlays, mountMenu, saveOverlays } from './view.js';
 import { mountTrading, updateTrading } from '/kite/static/trading.js';
 
 const MAX_DAYS = 15;
@@ -26,6 +27,8 @@ const els = {
   zoomFit: $('zoom-fit'),
   sound: $('sound'),
   overlays: $('overlays'),
+  viewBtn: $('view-btn'),
+  viewPanel: $('view-panel'),
   alertLogBtn: $('alert-log-btn'),
   alertBadge: $('alert-badge'),
   alertLog: $('alert-log'),
@@ -65,18 +68,6 @@ const state = {
 };
 
 const SIGNAL_NAMES = { buy: 'Double top buy', sell: 'Double bottom sell' };
-const OVERLAYS_KEY = 'pnf.overlays';
-
-function loadOverlays() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(OVERLAYS_KEY));
-    if (saved && typeof saved.vwap === 'boolean' && typeof saved.sma === 'boolean') return saved;
-  } catch {
-    // unreadable or blocked storage: defaults
-  }
-  return { vwap: true, sma: true };
-}
-
 state.overlays = loadOverlays();
 const FLASH_MS = 8000;
 const CATCHUP_ALERT_S = 5 * 60; // after a reconnect, signals at most this old still alert
@@ -703,21 +694,19 @@ function renderSound() {
   els.sound.title = on ? 'Alert sounds on - click to mute' : 'Alert sounds muted - click to unmute';
 }
 
+mountMenu(els.viewBtn, els.viewPanel);
+
 function renderOverlayToggles() {
-  for (const btn of els.overlays.querySelectorAll('button')) {
-    btn.setAttribute('aria-pressed', String(state.overlays[btn.dataset.overlay]));
+  for (const box of els.overlays.querySelectorAll('input[data-overlay]')) {
+    box.checked = state.overlays[box.dataset.overlay];
   }
 }
 
-els.overlays.addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-overlay]');
-  if (!btn) return;
-  state.overlays = { ...state.overlays, [btn.dataset.overlay]: !state.overlays[btn.dataset.overlay] };
-  try {
-    localStorage.setItem(OVERLAYS_KEY, JSON.stringify(state.overlays));
-  } catch {
-    // storage unavailable: the choice lasts for this page only
-  }
+els.overlays.addEventListener('change', (e) => {
+  const box = e.target.closest('input[data-overlay]');
+  if (!box) return;
+  state.overlays = { ...state.overlays, [box.dataset.overlay]: box.checked };
+  saveOverlays(state.overlays);
   for (const { panel } of state.panels.values()) panel.setOverlays(state.overlays);
   renderOverlayToggles();
   renderPanels();
