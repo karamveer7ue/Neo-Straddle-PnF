@@ -139,12 +139,24 @@ class KiteGateway:
         await self._read("invalidate_access_token")
 
     async def place_market_order(
-        self, *, exchange: str, tradingsymbol: str, side: str, quantity: int, product: str, tag: str
+        self,
+        *,
+        exchange: str,
+        tradingsymbol: str,
+        side: str,
+        quantity: int,
+        product: str,
+        tag: str,
+        max_quantity: int,
     ) -> list[dict]:
-        """Place a MARKET order with automatic market protection, sliced by Kite when
-        the quantity is above the exchange's freeze limit.
+        """Place a MARKET order with automatic market protection.
 
-        Returns one entry per slice: {"order_id": ...} or {"error": message}.
+        Up to `max_quantity` (the exchange's freeze quantity) it is one order. Above
+        it Kite slices it into orders of at most that size (autoslice) - which Kite
+        refuses for smaller quantities ("Quantity should be greater than or equal to
+        1000 for order slicing"), so slicing is asked for only when needed.
+
+        Returns one entry per order: {"order_id": ...} or {"error": message}.
         Raises KiteError when nothing was placed, OutcomeUnknown when that is not certain.
         """
         params = {
@@ -162,9 +174,12 @@ class KiteGateway:
         delay = RETRY_DELAY
         for attempt in range(ORDER_RETRIES_ON_429 + 1):
             try:
-                reply = await self._run(
-                    self.order_client.place_autoslice_order, _lock=self._order_lock, **params
+                place = (
+                    self.order_client.place_autoslice_order
+                    if quantity > max_quantity
+                    else self.order_client.place_order
                 )
+                reply = await self._run(place, _lock=self._order_lock, **params)
                 return parse_slices(reply)
             except kex.TokenException as exc:
                 raise SessionExpired(_message(exc)) from exc
@@ -184,11 +199,13 @@ class KiteGateway:
 
 
 def parse_slices(reply) -> list[dict]:
-    """Normalise an autoslice reply: a list with one {"order_id"} or {"error"} per slice.
+    """Normalise an order reply: a list with one {"order_id"} or {"error"} per order.
 
-    Kite returns a list for autoslice orders; a bare {"order_id"} (a regular
-    order reply) is accepted too.
+    Kite returns a list for an autoslice order; the SDK's place_order returns
+    the bare order ID (a {"order_id"} dict is accepted too).
     """
+    if isinstance(reply, (str, int)) and str(reply):
+        reply = {"order_id": reply}
     items = reply if isinstance(reply, list) else [reply]
     slices = []
     for item in items:

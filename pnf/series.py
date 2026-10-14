@@ -26,6 +26,7 @@ class Underlying:
     index_token: str  # the index token for quotes, history and the WebSocket
     strike_step: int
     side_offset: int  # the side charts sit at ATM - offset and ATM + offset
+    max_order_qty: int  # the exchange's freeze quantity: the most one option order may carry
 
     @property
     def chart_offsets(self) -> dict[str, int]:
@@ -38,8 +39,12 @@ class Underlying:
 
 # NIFTY trades on NSE; SENSEX on BSE. Both index tokens are names, not numbers.
 UNDERLYINGS = {
-    "NIFTY": Underlying("NIFTY", "nse_fo", "nse_cm", "Nifty 50", strike_step=50, side_offset=200),
-    "SENSEX": Underlying("SENSEX", "bse_fo", "bse_cm", "SENSEX", strike_step=100, side_offset=500),
+    "NIFTY": Underlying(
+        "NIFTY", "nse_fo", "nse_cm", "Nifty 50", strike_step=50, side_offset=200, max_order_qty=3510
+    ),
+    "SENSEX": Underlying(
+        "SENSEX", "bse_fo", "bse_cm", "SENSEX", strike_step=100, side_offset=500, max_order_qty=1000
+    ),
 }
 DEFAULT_UNDERLYING = "NIFTY"
 

@@ -61,7 +61,8 @@ class FakeKiteApi(BaseHTTPRequestHandler):
             self.wfile.write(page)
             return
         if self.command == "POST" and self.path == "/orders/regular":
-            payload = {"status": "success", "data": [{"order_id": "777"}]}  # an autoslice reply
+            sliced = "autoslice=true" in self.seen[-1]["body"]
+            payload = {"status": "success", "data": [{"order_id": "777"}] if sliced else {"order_id": "778"}}
         elif self.path.startswith("/orders"):
             payload = {"status": "success", "data": [] if self.command == "GET" else {"order_id": "777"}}
         else:
@@ -132,7 +133,7 @@ def test_orders_go_through_the_relay_and_reads_go_direct(relay):
     relay_url, api_url, seen = relay
     kite = kite_client(api_url, relay_url)
     assert kite.place_autoslice_order(**ORDER) == [{"order_id": "777"}]
-    [placed] = seen
+    placed = seen[0]
     assert (placed["method"], placed["path"]) == ("POST", "/orders/regular")
     assert placed["headers"]["Authorization"] == "token key:tok"
     assert placed["headers"]["User-Agent"] == "pnf-kite-route/1"  # it came from the relay
@@ -143,6 +144,10 @@ def test_orders_go_through_the_relay_and_reads_go_direct(relay):
 
     kite.orders()  # a read: straight to Kite, not through the relay
     assert seen[2]["path"] == "/orders" and "X-Relay-Signature" not in seen[2]["headers"]
+
+    # A plain (unsliced) order goes through the relay the same way.
+    assert kite.place_order(**ORDER) == "778"
+    assert seen[3]["headers"]["User-Agent"] == "pnf-kite-route/1" and "autoslice" not in seen[3]["body"]
 
 
 def test_a_wrong_secret_is_refused_and_nothing_reaches_kite(relay):
@@ -195,7 +200,13 @@ def test_kite_unreachable_from_the_relay_is_an_unknown_outcome():
         with pytest.raises(OutcomeUnknown, match="no reply from Kite"):
             asyncio.run(
                 gw.place_market_order(
-                    exchange="NFO", tradingsymbol="X", side="SELL", quantity=65, product="NRML", tag="pnf"
+                    exchange="NFO",
+                    tradingsymbol="X",
+                    side="SELL",
+                    quantity=65,
+                    product="NRML",
+                    tag="pnf",
+                    max_quantity=3510,
                 )
             )
 

@@ -173,7 +173,7 @@ def test_sell_sends_both_legs_at_once_without_waiting_for_fills(connected):
     b, fake = connected()
     fake.calls.clear()
     res = asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 65))
-    assert fake.calls == ["place_autoslice_order", "place_autoslice_order"]  # nothing in between
+    assert fake.calls == ["place_order", "place_order"]  # nothing in between
     assert [r["ok"] for r in res["results"]] == [True, True]
 
 
@@ -198,7 +198,7 @@ def test_a_session_expiring_between_the_legs_reports_the_placed_leg(connected):
         if f.placed:
             raise kex.TokenException("Token expired")
 
-    fake.before["place_autoslice_order"] = expire_on_second_order
+    fake.before["place_order"] = expire_on_second_order
     res = asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 65))
     assert [(r["kind"], r["ok"]) for r in res["results"]] == [("CE", True), ("PE", False)]
     assert res["results"][1]["sessionExpired"]
@@ -291,7 +291,7 @@ def test_exit_warns_about_a_sell_still_working(connected):
     b, fake = connected()
     asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 65))
     fake.hold_open = {CE}
-    fake.placed_extra = fake.place_autoslice_order(
+    fake.placed_extra = fake.place_order(
         variety="regular", exchange="NFO", tradingsymbol=CE, transaction_type="SELL",
         quantity=65, product="NRML", order_type="MARKET", tag="pnf",
     )  # fmt: skip
@@ -429,16 +429,24 @@ def test_rate_limited_order_is_retried_but_a_timeout_is_not(files):
     fake = FakeKite()
     fake.access_token = "t"
     gw = KiteGateway("key", "secret", client=fake)
-    args = dict(exchange="NFO", tradingsymbol=CE, side="SELL", quantity=65, product="NRML", tag="pnf")
+    args = dict(
+        exchange="NFO",
+        tradingsymbol=CE,
+        side="SELL",
+        quantity=65,
+        product="NRML",
+        tag="pnf",
+        max_quantity=3510,
+    )
     fake.fail_next = [kex.NetworkException("Too many requests", code=429)]
     assert asyncio.run(gw.place_market_order(**args)) == [{"order_id": "1001"}]
-    assert fake.calls.count("place_autoslice_order") == 2
+    assert fake.calls.count("place_order") == 2
 
     fake.calls.clear()
     fake.fail_next = [requests.Timeout("read timed out")]
     with pytest.raises(OutcomeUnknown):
         asyncio.run(gw.place_market_order(**args))
-    assert fake.calls.count("place_autoslice_order") == 1  # may have been placed: never resent
+    assert fake.calls.count("place_order") == 1  # may have been placed: never resent
 
 
 def test_reads_are_retried_on_server_errors(files):
@@ -449,10 +457,37 @@ def test_reads_are_retried_on_server_errors(files):
     assert fake.calls == ["positions"] * 3
 
 
+def test_orders_are_sliced_only_above_the_exchanges_maximum(connected):
+    b, fake = connected(max_lots=60)
+    sensex = date(2026, 10, 15)
+    # 260 SENSEX (13 lots) is one plain order: Kite refuses slicing below 1,000
+    # ("Quantity should be greater than or equal to 1000 for order slicing").
+    res = asyncio.run(b.sell("SENSEX", sensex, 72300, 260))
+    assert [r["ok"] for r in res["results"]] == [True, True]
+    assert fake.calls[-2:] == ["place_order", "place_order"]
+    # Exactly the maximum is still one order.
+    asyncio.run(b.sell("SENSEX", sensex, 72300, 1000))
+    assert fake.calls[-2:] == ["place_order", "place_order"]
+    # Above it (an exit of 1,260 here), Kite slices it into orders of at most 1,000.
+    asyncio.run(b.exit("SENSEX|2026-10-15|72300", 1))
+    assert fake.calls[-2:] == ["place_autoslice_order", "place_autoslice_order"]
+    assert [p["quantity"] for p in fake.placed[-4:]] == [1000, 260, 1000, 260]
+    asyncio.run(b.refresh())
+    assert all(r["quantity"] == 0 for r in fake.positions()["net"])
+
+
+def test_the_maximum_order_quantities_are_the_exchanges():
+    from pnf.series import UNDERLYINGS
+
+    assert UNDERLYINGS["NIFTY"].max_order_qty == 3510
+    assert UNDERLYINGS["SENSEX"].max_order_qty == 1000
+
+
 def test_autoslice_reply_with_a_failed_slice():
     reply = [{"order_id": "1"}, {"order_id": 2}, {"error": {"code": 400, "message": "Insufficient funds"}}]
     assert parse_slices(reply) == [{"order_id": "1"}, {"order_id": "2"}, {"error": "Insufficient funds"}]
     assert parse_slices({"order_id": "9"}) == [{"order_id": "9"}]
+    assert parse_slices("250101000012345") == [{"order_id": "250101000012345"}]  # place_order's reply
 
 
 # ---------------- Endpoints ----------------

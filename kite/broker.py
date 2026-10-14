@@ -451,6 +451,7 @@ class KiteBroker:
                 quantity=req.quantity,
                 product=req.product,
                 tag=ORDER_TAG,
+                max_quantity=UNDERLYINGS[c.underlying].max_order_qty,
             )
         except SessionExpired as exc:  # nothing was placed for this leg; the caller stops here
             return {**result, "ok": False, "sessionExpired": True, "error": f"Kite session expired: {exc}"}

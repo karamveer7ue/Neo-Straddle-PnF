@@ -54,6 +54,15 @@ def _instrument_rows(name, exchange, expiries, strikes, lot_size, token_base, co
     return rows
 
 
+# The exchanges' maximum quantity per order (freeze quantity), by underlying.
+FREEZE_QUANTITY = {"NIFTY": 3510, "SENSEX": 1000, "BANKNIFTY": 600}
+
+
+def freeze_quantity(tradingsymbol: str) -> int:
+    name = next(n for n in sorted(FREEZE_QUANTITY, key=len, reverse=True) if tradingsymbol.startswith(n))
+    return FREEZE_QUANTITY[name]
+
+
 def weekly_code(d: date) -> str:
     return f"{'123456789OND'[d.month - 1]}{d.day:02d}"
 
@@ -146,9 +155,31 @@ class FakeKite:
 
     # ---- orders ----
 
+    def place_order(self, **params):
+        """One order; Kite refuses it above the exchange's freeze quantity."""
+        self._check("place_order")
+        limit = freeze_quantity(params["tradingsymbol"])
+        if params["quantity"] > limit:
+            raise kex.InputException(f"Quantity exceeds the freeze limit of {limit}.", code=400)
+        return self._add_order(params, params["quantity"])
+
     def place_autoslice_order(self, **params):
+        """Orders of at most the freeze quantity each; like Kite, slicing is refused for
+        a quantity below the freeze quantity."""
         self._check("place_autoslice_order")
-        self.placed.append(params)
+        limit = freeze_quantity(params["tradingsymbol"])
+        if params["quantity"] < limit:
+            raise kex.InputException(
+                f"Quantity should be greater than or equal to {limit} for order slicing.", code=400
+            )
+        slices, left = [], params["quantity"]
+        while left > 0:
+            slices.append({"order_id": self._add_order(params, min(left, limit))})
+            left -= limit
+        return slices
+
+    def _add_order(self, params, quantity):
+        self.placed.append({**params, "quantity": quantity})
         self._next_id += 1
         order_id = str(self._next_id)
         symbol = params["tradingsymbol"]
@@ -158,24 +189,22 @@ class FakeKite:
             "tradingsymbol": symbol,
             "transaction_type": params["transaction_type"],
             "product": params["product"],
-            "quantity": params["quantity"],
+            "quantity": quantity,
             "tag": params.get("tag"),
             "status": "OPEN",
             "status_message": None,
             "filled_quantity": 0,
-            "pending_quantity": params["quantity"],
+            "pending_quantity": quantity,
             "average_price": 0.0,
         }
         if symbol in self.reject:
             order.update(status="REJECTED", status_message=self.reject[symbol], pending_quantity=0)
         elif symbol not in self.hold_open:
             fill = self.price(symbol)
-            order.update(
-                status="COMPLETE", filled_quantity=params["quantity"], pending_quantity=0, average_price=fill
-            )
-            self.fills.append({**params, "price": fill})
+            order.update(status="COMPLETE", filled_quantity=quantity, pending_quantity=0, average_price=fill)
+            self.fills.append({**params, "quantity": quantity, "price": fill})
         self.order_book.append(order)
-        return [{"order_id": order_id}]
+        return order_id
 
     def complete(self, order_id):
         """Fill an order held open."""
