@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildPnf, columnSma, intradayVwap } from '../pnf/static/pnf.js';
+import { buildPnf, columnVwma, intradayVwap } from '../pnf/static/pnf.js';
 
 // p0 = 200 with 0.5% boxes gives a box of exactly 1.00, so rows read as rupees.
 const bars = (...closes) => closes.map((c, i) => [i, c]);
@@ -108,23 +108,33 @@ test('columns record the last bar processed while they were current', () => {
 
 // ---------------- Moving average ----------------
 
-test('column SMA averages the midpoints of the last N columns', () => {
+test('column VWMA weights the midpoints of the last N columns by their volume', () => {
   const cols = [
-    { hi: 5, lo: 1 }, // mid 3
-    { hi: 4, lo: 2 }, // mid 3
-    { hi: 9, lo: 3 }, // mid 6
-    { hi: 8, lo: 0 }, // mid 4
+    { hi: 5, lo: 1, volume: 100 }, // mid 3
+    { hi: 4, lo: 2, volume: 100 }, // mid 3
+    { hi: 9, lo: 3, volume: 200 }, // mid 6
+    { hi: 8, lo: 0, volume: 0 }, // mid 4, traded nothing
   ];
-  assert.deepEqual(columnSma(cols, 3), [null, null, 4, 13 / 3]);
+  assert.deepEqual(columnVwma(cols, 3), [null, null, 1800 / 400, 1500 / 300]);
 });
 
-test('chart SMA is in price terms, one value per column', () => {
-  // p0 = 200, box = 1: rows read as rupees above 200.
-  const chart = buildPnf(bars(200, 205, 202, 206, 203), { smaPeriod: 2 });
+test('column VWMA is unknown while its columns traded no volume', () => {
+  const cols = [{ hi: 2, lo: 0, volume: 0 }, { hi: 3, lo: 1, volume: 0 }];
+  assert.deepEqual(columnVwma(cols, 2), [null, null]);
+});
+
+test('chart VWMA is in price terms, one value per column, from the volume each column traded', () => {
+  // p0 = 200, box = 1: rows read as rupees above 200. The first bar opens no column,
+  // so its volume counts nowhere; a reversal bar's volume goes to the new column.
+  const chart = buildPnf(
+    [[0, 200, 50], [1, 205, 10], [2, 202, 20], [3, 206, 30], [4, 203, 40]],
+    { vwmaPeriod: 2 },
+  );
   assert.deepEqual(shape(chart), ['X1,2,3,4,5', 'O4,3,2', 'X3,4,5,6', 'O5,4,3']);
-  // midpoints 3, 3, 4.5, 4 -> SMA(2): -, 3, 3.75, 4.25 rows above 200
-  assert.deepEqual(chart.sma, [null, 203, 203.75, 204.25]);
-  assert.equal(buildPnf(bars(200, 205)).smaPeriod, 10);
+  assert.deepEqual(chart.columns.map((c) => c.volume), [10, 20, 30, 40]);
+  // midpoints 3, 3, 4.5, 4 rows above 200
+  assert.deepEqual(chart.vwma, [null, 200 + 90 / 30, 200 + 195 / 50, 200 + 295 / 70]);
+  assert.equal(buildPnf(bars(200, 205)).vwmaPeriod, 10);
 });
 
 // ---------------- Axis tags ----------------

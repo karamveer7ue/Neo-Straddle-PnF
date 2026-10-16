@@ -1,15 +1,17 @@
 // The View menu, shared by the live page and the simulator: the overlay
-// checkboxes (VWAP, SMA 10), box size and, on the live page, the day count sit
+// checkboxes (VWAP, VWMA 10), box size and, on the live page, the day count sit
 // behind one top-bar button to keep the bar short.
 
 const OVERLAYS_KEY = 'pnf.overlays'; // per origin: the live page and the simulator each keep their own
-const DEFAULT_OVERLAYS = { vwap: true, sma: false };
+const DEFAULT_OVERLAYS = { vwap: true, vwma: false };
 
-/** The browser's VWAP / SMA 10 choice, or the defaults (VWAP on, SMA off). */
+/** The browser's VWAP / VWMA 10 choice, or the defaults (VWAP on, VWMA off). */
 export function loadOverlays() {
   try {
     const saved = JSON.parse(localStorage.getItem(OVERLAYS_KEY));
-    if (saved && typeof saved.vwap === 'boolean' && typeof saved.sma === 'boolean') return saved;
+    // A choice saved before VWMA 10 replaced SMA 10 carries over from the SMA one.
+    const vwma = saved?.vwma ?? saved?.sma;
+    if (saved && typeof saved.vwap === 'boolean' && typeof vwma === 'boolean') return { vwap: saved.vwap, vwma };
   } catch {
     // unreadable or blocked storage: defaults
   }

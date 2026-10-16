@@ -2,7 +2,7 @@
 
 Replays past NIFTY, BANKNIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page (ATM - 200, ATM, ATM + 200 for NIFTY; ATM - 500, ATM, ATM + 500 for BANKNIFTY and SENSEX), at 1X, 10X, 50X, 100X or 200X.
 
-It is a separate app, so the live page is never affected, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, SMA 10, signal detection, the chart renderer and the alerts.
+It is a separate app, so the live page is never affected, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, VWMA 10, signal detection, the chart renderer and the alerts.
 It needs only the consumer key from `.env` (market data), so it never asks for a TOTP.
 
 ## Running
@@ -35,13 +35,13 @@ To run the simulator on its own:
 | **Timeline** | Drag to jump to any minute (keyboard: left and right arrows step one minute). The thin bar below it shows the time left until the next minute appears. |
 | **Clock** | The simulated time (to the second) and the minute count. |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
-| **View (VWAP / SMA 10, box size), bell** | As on the live page. |
+| **View (VWAP / VWMA 10, box size), bell** | As on the live page. |
 
 ## How a run works
 
 - **One continuous run:** the trading days between the two dates play back-to-back on one chart, like the live page's multi-day view; weekends and holidays are skipped automatically.
 - **Context day:** the trading session just before the From date (weekends and holidays skipped) is already drawn when the run loads, and the replay starts at the From date's first minute.
-  The charts therefore start with history, as on the live page: SMA 10 has values from the first minute, signals are judged against the previous day's columns, and the box size comes from the context day's first close.
+  The charts therefore start with history, as on the live page: VWMA 10 has values from the first minute, signals are judged against the previous day's columns, and the box size comes from the context day's first close.
   VWAP itself restarts at each session's open, so the context day shows its own VWAP line and the From date's VWAP starts fresh at 09:15.
   The context day is not replayed and stays on the chart when you go back along the timeline; if a contract had not traded yet that day, its chart starts at the From date.
 - **Strikes** are fixed for the whole run, from the start day's index open (or the ATM you set).

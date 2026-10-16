@@ -37,7 +37,7 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - **Expiry picker:** upcoming weekly, next weekly, this month's monthly and next month's monthly (BANKNIFTY has monthlies only, so just the two monthlies).
 - **History window:** 1 to 15 trading sessions.
 - **Live updates:** after a TOTP login on the page, prices stream in and a new 1-minute bar closes every minute; boxes from the minute still forming are drawn faded.
-- **VWAP and SMA 10:** the straddle's intraday VWAP (yellow) and a 10-column simple moving average (light black; soft grey in dark mode), each switchable on or off in the **View** menu, also shown in each panel header and on the price axis.
+- **VWAP and VWMA 10:** the straddle's intraday VWAP (yellow) and a 10-column volume-weighted moving average (light black; soft grey in dark mode), each switchable on or off in the **View** menu, also shown in each panel header and on the price axis.
 - **Signals:** double top buy and double bottom sell are marked on the charts.
   A new double bottom sell with the straddle below its VWAP raises a toast, a panel flash, a chime and (when the tab is in the background) a system notification; double top buys, and sells at or above VWAP, are marked only.
 - **Trading through Kite (optional):** a quantity field and Sell button under each chart, live P&L for the positions taken, and Exit 50% / Exit Full on the charts holding one.
@@ -107,9 +107,10 @@ The newest column updates live, including the minute still forming.
 
 Because Point & Figure compresses time, a busy sideways morning becomes a few columns while a trend prints many, so the VWAP can sit some distance from the most recent columns; that distance is the point of the line (premium above or below its average traded price for the day).
 
-### Simple moving average (SMA 10)
+### Volume-weighted moving average (VWMA 10)
 
-The SMA follows the usual Point & Figure convention: the average of the midpoints of the last 10 columns, where a column's midpoint is halfway between its top and bottom box.
+The VWMA averages the midpoints of the last 10 columns, where a column's midpoint is halfway between its top and bottom box, as the usual Point & Figure moving average does.
+Each midpoint is weighted by the CE + PE volume of the minutes that built that column, so busy columns pull the line harder than quiet ones.
 It has one value per column and is drawn as a line through the column centres.
 Because it counts columns rather than minutes, it is steady through sideways chop and runs straight across sessions (unlike VWAP, it does not restart each day).
 The line starts once a chart has 10 columns, and the newest column's value moves as that column grows.
@@ -256,7 +257,7 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | **ATM** | Type a strike (a multiple of 50 for NIFTY, 100 for BANKNIFTY and SENSEX) and press Enter or **Apply**. Esc discards the edit. |
 | **Auto** | Goes back to the ATM from today's index open. Hover it to see the open and the strike it gives. |
 | **View** | Opens a menu with the chart settings below; Esc or a click elsewhere closes it. |
-| **View > VWAP / SMA 10** | Show or hide each overlay on all three charts; VWAP is on and SMA 10 off until you change them (remembered by the browser). |
+| **View > VWAP / VWMA 10** | Show or hide each overlay on all three charts; VWAP is on and VWMA 10 off until you change them (remembered by the browser). |
 | **View > Box size** | **-** smaller boxes, **Fit** fits the boxes to the panel height, **+** bigger boxes. |
 | **View > Days** | How many trading sessions of history to show (1 to 15). |
 | **Bell** | Turns alert sounds on or off (remembered by the browser). |
@@ -265,10 +266,10 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 
 Inside each panel:
 
-- **Header:** straddle price, change since the session's first close, CE and PE prices, VWAP and SMA 10 (when shown), and the latest signal.
+- **Header:** straddle price, change since the session's first close, CE and PE prices, VWAP and VWMA 10 (when shown), and the latest signal.
 - **Meta line:** box size, reversal, number of columns, and the first session in the window.
-- **Chart:** the dashed blue line and blue axis tag mark the current price; the yellow and light-black tags mark the current VWAP and SMA 10; dotted vertical lines separate sessions.
-- **Hover:** shows the box's price, the minute it printed, the VWAP and SMA 10 at that column, and the signal name if it is a signal box.
+- **Chart:** the dashed blue line and blue axis tag mark the current price; the yellow and light-black tags mark the current VWAP and VWMA 10; dotted vertical lines separate sessions.
+- **Hover:** shows the box's price, the minute it printed, the VWAP and VWMA 10 at that column, and the signal name if it is a signal box.
 - **Scrolling:** charts follow the newest column automatically; scroll back to browse history, and scroll to the right end to resume following.
 
 ## Alerts
@@ -316,11 +317,11 @@ Setup (Kite Connect app, redirect URL, static IP registration), how orders are s
 
 ## Simulator
 
-The simulator replays past NIFTY, BANKNIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page, so you can watch how the straddles, VWAP, SMA 10 and the double top / double bottom signals developed on a day that has already traded.
+The simulator replays past NIFTY, BANKNIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page, so you can watch how the straddles, VWAP, VWMA 10 and the double top / double bottom signals developed on a day that has already traded.
 
 ![The straddle simulator replaying a NIFTY session at 50X, mid-afternoon](docs/simulator.png)
 
-It is a separate app (`pnf_sim/`), so it never interferes with the live page, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, SMA 10, signal detection, the chart renderer and the alerts.
+It is a separate app (`pnf_sim/`), so it never interferes with the live page, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, VWMA 10, signal detection, the chart renderer and the alerts.
 It reads only market data, so it needs just the consumer key from `.env` and never asks for a TOTP.
 
 ### Running the simulator
@@ -362,7 +363,7 @@ Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY`
 | **Timeline** | Drag to jump to any minute; the left and right arrow keys step exactly one minute (also while the timeline has focus). The thin bar under it shows the time left until the current minute completes. |
 | **Clock** | The simulated time, to the second, and the minute count (for example, "minute 296 of 375"). |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
-| **View (VWAP / SMA 10, box size), bell** | The same as on the live page; the simulator remembers its own VWAP/SMA choice. |
+| **View (VWAP / VWMA 10, box size), bell** | The same as on the live page; the simulator remembers its own VWAP/VWMA choice. |
 
 Speeds:
 
@@ -384,11 +385,11 @@ Keyboard shortcuts work anywhere on the page except while typing in a field (the
 
 - **One continuous run:** the trading days between the two dates play back-to-back on one chart, like the live page's multi-day view; weekends and holidays are skipped automatically.
 - **Context day:** the trading session just before the From date (weekends and holidays skipped) is already drawn when the run loads, and the replay starts at the From date's first minute.
-  The charts therefore start with history, as on the live page: SMA 10 has values from the first minute, signals are judged against the previous day's columns, and the box size comes from the context day's first close.
+  The charts therefore start with history, as on the live page: VWMA 10 has values from the first minute, signals are judged against the previous day's columns, and the box size comes from the context day's first close.
   VWAP itself restarts at each session's open, so the context day shows its own VWAP line and the From date's VWAP starts fresh at 09:15.
   The context day is not replayed and stays on the chart when you go back along the timeline; if a contract had not traded yet that day, its chart starts at the From date.
 - **Strikes** are fixed for the whole run, from the start day's index open (or the ATM you typed): ATM - 200, ATM and ATM + 200 for NIFTY, ATM - 500, ATM and ATM + 500 for BANKNIFTY and SENSEX.
-- **Chart rules** are the live page's: box size 0.5% of the first straddle close on the chart (the context day's), 3-box reversal, VWAP restarting at each session's open, SMA 10 of column midpoints.
+- **Chart rules** are the live page's: box size 0.5% of the first straddle close on the chart (the context day's), 3-box reversal, VWAP restarting at each session's open, VWMA 10 of column midpoints.
 - **Movement within each minute:** the history API serves 1-minute candles, so each minute plays along its candle's likely path in four steps: open, the two extremes, then the close (a rising candle is taken to dip first, a falling one to rally first).
   The straddle prices, the CE and PE prices, the forming boxes (drawn faded, as on the live page), VWAP and the spot all move during the minute, and the minute's bar is completed at its close.
   For the straddle, the CE and PE paths are added step by step, which approximates the straddle's true path within the minute.
@@ -445,7 +446,7 @@ node --test tests/*.test.mjs                   # P&F engine, simulator playback 
 | `pnf/app.py` | FastAPI server: the page, `POST /api/login`, `POST /api/config`, and the `/ws` update channel. |
 | `pnf/static/pnf.js` | Point & Figure construction and signal detection (the only P&F code). |
 | `pnf/static/chart.js` | Canvas chart renderer (draws only the visible area, so long histories stay fast). |
-| `pnf/static/axis.js` | Price-axis tag layout, so the price, VWAP and SMA tags never overlap. |
+| `pnf/static/axis.js` | Price-axis tag layout, so the price, VWAP and VWMA tags never overlap. |
 | `pnf/static/alerts.js` | Toasts, sounds and system notifications. |
 | `pnf/static/app.js` | Page wiring: controls, server messages, panel headers. |
 | `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits) and `POST /api/simulate` (builds a run); serves the live app's static files read-only. |
@@ -471,7 +472,7 @@ node --test tests/*.test.mjs                   # P&F engine, simulator playback 
 ## Limitations
 
 - NIFTY, BANKNIFTY and SENSEX only, with fixed side-strike distances (± 200, ± 500 and ± 500).
-- Box size (0.5%), reversal (3 boxes) and the SMA period (10 columns) are fixed in the code (`pnf/static/pnf.js`).
+- Box size (0.5%), reversal (3 boxes) and the VWMA period (10 columns) are fixed in the code (`pnf/static/pnf.js`).
 - Alerts work only while the page is open in a browser tab.
 - This is a charting tool, not investment advice.
   Check signals against your own analysis before trading.

@@ -42,8 +42,8 @@ function readTheme() {
     accentText: v('--accent-text'),
     vwap: v('--vwap'),
     vwapText: v('--vwap-text'),
-    sma: v('--sma'),
-    smaText: v('--sma-text'),
+    vwma: v('--vwma'),
+    vwmaText: v('--vwma-text'),
     separator: v('--plot-separator'),
     stripBg: v('--plot-strip'),
     hover: v('--plot-hover'),
@@ -86,7 +86,7 @@ export class PnfPanel {
     this.lastCommittedTs = -Infinity;
     this.dayMarks = [];
     this.cellOverride = null;
-    this.overlays = { vwap: true, sma: true };
+    this.overlays = { vwap: true, vwma: true };
     this.cell = 12;
     this.follow = true;
     this.hover = null; // {x, y} in CSS px within the plot
@@ -238,8 +238,8 @@ export class PnfPanel {
   }
 
 
-  get currentSma() {
-    return this.pnf?.sma.at(-1) ?? null;
+  get currentVwma() {
+    return this.pnf?.vwma.at(-1) ?? null;
   }
 
   get currentVwap() {
@@ -387,14 +387,14 @@ export class PnfPanel {
     ctx.lineWidth = 1.5;
     ctx.lineJoin = 'round';
 
-    // SMA of the last N column midpoints: a line through the column centres.
+    // VWMA of the last N column midpoints: a line through the column centres.
     // It is column-based, so unlike VWAP it runs straight across sessions.
-    if (this.overlays.sma) {
-      ctx.strokeStyle = t.sma;
+    if (this.overlays.vwma) {
+      ctx.strokeStyle = t.vwma;
       ctx.beginPath();
       let started = false;
       for (let i = fromCol; i <= toCol; i++) {
-        const v = pnf.sma[i];
+        const v = pnf.vwma[i];
         if (v === null) continue;
         const x = this.colX(i) + c / 2;
         const y = this.priceY(v);
@@ -449,8 +449,8 @@ export class PnfPanel {
     if (this.overlays.vwap && vwap !== null) {
       tags.push({ y: this.priceY(vwap), value: vwap, bg: t.vwap, fg: t.vwapText });
     }
-    const sma = this.currentSma;
-    if (this.overlays.sma && sma !== null) tags.push({ y: this.priceY(sma), value: sma, bg: t.sma, fg: t.smaText });
+    const vwma = this.currentVwma;
+    if (this.overlays.vwma && vwma !== null) tags.push({ y: this.priceY(vwma), value: vwma, bg: t.vwma, fg: t.vwmaText });
     this.drawAxis(chartW, firstRow, lastRow, labelStep, tags, hit);
     // Only the hovered panel drives the shared tooltip; the others redrawing on a tick
     // must not hide it (mouseleave clears it when the pointer goes).
@@ -563,7 +563,7 @@ export class PnfPanel {
       provisional,
       signal: signal?.type ?? null,
       vwap: this.overlays.vwap ? this.pnf.vwap[hit.col] : null,
-      sma: this.overlays.sma ? this.pnf.sma[hit.col] : null,
+      vwma: this.overlays.vwma ? this.pnf.vwma[hit.col] : null,
     };
   }
 }

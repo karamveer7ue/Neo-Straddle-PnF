@@ -409,7 +409,7 @@ function renderPanelHead(entry) {
     parts.push(' · ', el);
   };
   if (last && state.overlays.vwap) overlay('ph-vwap', 'VWAP', panel.currentVwap);
-  if (last && state.overlays.sma) overlay('ph-sma', 'SMA10', panel.currentSma);
+  if (last && state.overlays.vwma) overlay('ph-vwma', 'VWMA10', panel.currentVwma);
   q('.ph-legs').replaceChildren(...parts);
   q('.ph-legs').title = def.ce ? `${def.ce} + ${def.pe}` : '';
 
@@ -636,7 +636,7 @@ function showTooltip(desc, hover) {
     ? `<div class="tip-signal ${desc.signal}">${desc.signal === 'buy' ? '▲' : '▼'} ${SIGNAL_NAMES[desc.signal]}</div>`
     : '';
   const extra = (desc.vwap != null ? `<div class="tip-vwap">VWAP ${fmtPrice(desc.vwap)}</div>` : '') +
-    (desc.sma != null ? `<div class="tip-sma">SMA 10 ${fmtPrice(desc.sma)}</div>` : '');
+    (desc.vwma != null ? `<div class="tip-vwma">VWMA 10 ${fmtPrice(desc.vwma)}</div>` : '');
   tip.innerHTML = `${signal}<b class="${dir}">${desc.dir}</b> ${fmtPrice(desc.price)} ` +
     `<span class="muted">· ${desc.when}</span>${extra}`;
   tip.hidden = false;

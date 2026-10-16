@@ -128,7 +128,7 @@ async def build_run(gw: NeoGateway, req: SimRequest) -> dict:
         raise SimError(f"No {u.key} trading sessions between {req.start:%d %b} and {req.end:%d %b %Y}.")
     earlier = await _index_before(gw, u, req.start)
     # The session just before the run is drawn as context, so the replay starts on a chart
-    # that already has history (SMA, signals and box size as on the live page).
+    # that already has history (VWMA, signals and box size as on the live page).
     context_day = max((session_date(ts) for ts in earlier), default=None)
     prev_closes = _previous_closes(earlier, index, sessions)
     replay_start = min(index)  # first minute of the run proper

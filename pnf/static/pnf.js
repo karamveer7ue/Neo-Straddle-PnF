@@ -12,14 +12,14 @@ const EPS = 1e-9;
  * @param {Array<[number, number, number?]>} bars  [timestamp, close, volume?], oldest first
  * @param {{boxPct?: number, reversal?: number}} [opts]
  * @returns {null | {
- *   p0: number, box: number, reversal: number, smaPeriod: number, sma: Array<number|null>,
+ *   p0: number, box: number, reversal: number, vwmaPeriod: number, vwma: Array<number|null>,
  *   columns: Array<{dir: 'X'|'O', boxes: Array<{row: number, ts: number}>, hi: number, lo: number,
- *     startTs: number, endTs: number}>,
+ *     startTs: number, endTs: number, volume: number}>,
  *   vwap: Array<number|null>, vwapAt: (ts: number) => number|null,
  *   hi: number, lo: number, price: (row: number) => number, rowOf: (price: number) => number,
  * }}
  */
-export function buildPnf(bars, { boxPct = 0.5, reversal = 3, smaPeriod = 10 } = {}) {
+export function buildPnf(bars, { boxPct = 0.5, reversal = 3, vwmaPeriod = 10 } = {}) {
   if (!bars.length) return null;
   const p0 = bars[0][1];
   const box = (p0 * boxPct) / 100;
@@ -34,19 +34,21 @@ export function buildPnf(bars, { boxPct = 0.5, reversal = 3, smaPeriod = 10 } = 
   let col = null;
 
   const open = (dir, from, to, ts) => {
-    // startTs / endTs: the first and last bars processed while this was the current column.
-    col = { dir, boxes: [], hi: Math.max(from, to), lo: Math.min(from, to), startTs: ts, endTs: ts };
+    // startTs / endTs: the first and last bars processed while this was the current column;
+    // volume: what those bars traded.
+    col = { dir, boxes: [], hi: Math.max(from, to), lo: Math.min(from, to), startTs: ts, endTs: ts, volume: 0 };
     const step = dir === 'X' ? 1 : -1;
     for (let r = from; dir === 'X' ? r <= to : r >= to; r += step) col.boxes.push({ row: r, ts });
     columns.push(col);
   };
 
-  for (const [ts, p] of bars) {
+  for (const [ts, p, v = 0] of bars) {
     if (!col) {
       const u = upRow(p);
       const d = downRow(p);
       if (u >= 1) open('X', 1, u, ts);
       else if (d <= -1) open('O', -1, d, ts);
+      if (col) col.volume += v;
       continue;
     }
     if (col.dir === 'X') {
@@ -69,6 +71,7 @@ export function buildPnf(bars, { boxPct = 0.5, reversal = 3, smaPeriod = 10 } = 
       }
     }
     col.endTs = ts;
+    col.volume += v;
   }
 
   let hi = 0;
@@ -83,8 +86,8 @@ export function buildPnf(bars, { boxPct = 0.5, reversal = 3, smaPeriod = 10 } = 
   return {
     p0, box, reversal, columns, hi, lo, price, rowOf,
     signals: findSignals(columns),
-    smaPeriod,
-    sma: columnSma(columns, smaPeriod).map((row) => (row === null ? null : price(row))),
+    vwmaPeriod,
+    vwma: columnVwma(columns, vwmaPeriod).map((row) => (row === null ? null : price(row))),
     // Intraday VWAP as it stood when each column last updated.
     vwap: columns.map((col) => vwapByTs.get(col.endTs) ?? null),
     /** Intraday VWAP as of the bar at `ts` (null if no such bar or no volume yet). */
@@ -123,20 +126,23 @@ export function intradayVwap(bars) {
 }
 
 /**
- * Simple moving average of column midpoints - the usual P&F moving average.
- * Element i averages the midpoints ((hi + lo) / 2, in rows) of columns
- * i - period + 1 .. i; it is null until `period` columns exist.
+ * Volume-weighted moving average of column midpoints: element i averages the
+ * midpoints ((hi + lo) / 2, in rows) of columns i - period + 1 .. i, each
+ * weighted by the volume traded while it was the current column. It is null
+ * until `period` columns exist, and while those columns traded no volume.
  * @returns {Array<number|null>} one value per column, in rows
  */
-export function columnSma(columns, period) {
-  const out = [];
-  let sum = 0;
-  columns.forEach((col, i) => {
-    sum += (col.hi + col.lo) / 2;
-    if (i >= period) sum -= (columns[i - period].hi + columns[i - period].lo) / 2;
-    out.push(i >= period - 1 ? sum / period : null);
+export function columnVwma(columns, period) {
+  return columns.map((_, i) => {
+    if (i < period - 1) return null;
+    let pv = 0;
+    let volume = 0;
+    for (const col of columns.slice(i - period + 1, i + 1)) {
+      pv += ((col.hi + col.lo) / 2) * col.volume;
+      volume += col.volume;
+    }
+    return volume > 0 ? pv / volume : null;
   });
-  return out;
 }
 
 /**
