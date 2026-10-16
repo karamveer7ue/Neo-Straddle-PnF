@@ -154,7 +154,8 @@ def test_static_files_must_be_revalidated_by_browsers():
 
     async def check(app, path):
         # Straight to the ASGI app; no lifespan, since static files need no gateway.
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://127.0.0.1:8765") as client:
             first = await client.get(path)
             assert first.status_code == 200
             assert first.headers["cache-control"] == "no-cache"

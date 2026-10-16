@@ -61,6 +61,7 @@ REREAD_DELAY = 0.2  # seconds before re-reading positions that lag the order boo
 CONSISTENT_READS = 4  # attempts at positions that include every fill, before an exit gives up
 BOOK_RETRY_DELAY = 60.0  # seconds before retrying a failed contract load
 LOGIN_STATE_TTL = 15 * 60  # seconds a /kite/login round trip may take
+LOGIN_STATES_KEPT = 20  # pending logins remembered (a page hitting /kite/login cannot grow it)
 TOKEN_RESET = time(6, 0)  # Kite expires access tokens around 06:00 IST
 INSTRUMENTS_READY = time(8, 30)  # Kite's day's instrument dump is out by then (new strikes, expiries)
 MARKET_HOURS = (time(9, 0), time(15, 45))
@@ -172,10 +173,23 @@ class KiteBroker:
 
     def login_url(self) -> str:
         now = clock.monotonic()
-        self._login_states = {s: t for s, t in self._login_states.items() if now - t < LOGIN_STATE_TTL}
+        live = [(s, t) for s, t in self._login_states.items() if now - t < LOGIN_STATE_TTL]
+        self._login_states = dict(live[-(LOGIN_STATES_KEPT - 1) :])  # oldest go first
         state = secrets.token_urlsafe(16)
         self._login_states[state] = now
         return self.gw.login_url(state)
+
+    def cancel_login(self, state: str) -> bool:
+        """Forget a login Kite reports as cancelled or failed. False when no login of
+        ours was pending (e.g. another site loading /callback): that goes unreported.
+        A reply without a state ends every pending login."""
+        now = clock.monotonic()
+        if state:
+            started = self._login_states.pop(state, None)
+            return started is not None and now - started <= LOGIN_STATE_TTL
+        pending = any(now - t <= LOGIN_STATE_TTL for t in self._login_states.values())
+        self._login_states = {}
+        return pending
 
     async def complete_login(self, request_token: str, state: str) -> None:
         """Finish the redirect flow. Raises KiteError with a message for the page."""

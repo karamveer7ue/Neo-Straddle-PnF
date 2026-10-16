@@ -263,7 +263,7 @@ def test_identical_simulate_requests_share_one_build(monkeypatch):
         sim_app.app.state.runs, sim_app.app.state.building = OrderedDict(), {}
         body = {"underlying": "NIFTY", "expiry": "2026-10-13", "start": "2026-10-09", "end": "2026-10-09"}
         transport = httpx.ASGITransport(app=sim_app.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="https://127.0.0.1:8766") as client:
             replies = await asyncio.gather(*(client.post("/api/simulate", json=body) for _ in range(3)))
         return [r.json() for r in replies]
 
@@ -295,7 +295,7 @@ def test_a_cached_run_needs_no_api_call_and_a_build_is_kept_when_its_caller_leav
         sim_app.app.state.runs, sim_app.app.state.building = OrderedDict(), {}
         body = {"underlying": "NIFTY", "expiry": "2026-10-13", "start": "2026-10-09", "end": "2026-10-09"}
         transport = httpx.ASGITransport(app=sim_app.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        async with httpx.AsyncClient(transport=transport, base_url="https://127.0.0.1:8766") as client:
             leaving = asyncio.create_task(client.post("/api/simulate", json=body))
             await asyncio.sleep(0.01)
             leaving.cancel()  # e.g. the page reloaded mid-build

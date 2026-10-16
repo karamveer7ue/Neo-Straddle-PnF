@@ -5,6 +5,7 @@ import logging
 
 import uvicorn
 
+from pnf.local_files import keep_files_private
 from pnf.tls import ensure_cert
 
 
@@ -13,6 +14,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    keep_files_private()  # before anything is written (logs, state files, certificates)
     cert, key = ensure_cert()  # the same certificate as the live app
     uvicorn.run(
         "pnf_sim.app:app",

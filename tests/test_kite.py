@@ -611,8 +611,15 @@ def test_login_redirect_and_callback(client):
     res = http.get(f"/kite/callback?request_token=bad&status=success&state={state}", follow_redirects=False)
     assert res.status_code == 303 and res.headers["location"] == "/"
     assert b.message.startswith("Kite login failed: Token is invalid")
-    res = http.get("/kite/callback?status=cancelled", follow_redirects=False)
+    b.message = ""
+    http.get("/kite/callback?status=cancelled", follow_redirects=False)
+    assert b.message == ""  # no login pending: another site loading /callback is not reported
+    state = http.get("/kite/login", follow_redirects=False).headers["location"].rsplit("state%3D", 1)[1]
+    http.get(f"/kite/callback?status=cancelled&state={state}", follow_redirects=False)
     assert "cancelled" in b.message
+    for _ in range(100):  # a page hitting /kite/login cannot grow the pending logins
+        http.get("/kite/login", follow_redirects=False)
+    assert len(b._login_states) == broker_mod.LOGIN_STATES_KEPT
 
     # The redirect URL registered with Kite: /callback.
     state = http.get("/kite/login", follow_redirects=False).headers["location"].rsplit("state%3D", 1)[1]

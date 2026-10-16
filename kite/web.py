@@ -22,7 +22,6 @@ import os
 from datetime import date
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
@@ -30,13 +29,13 @@ from pydantic import BaseModel, Field
 
 from pnf.series import UnderlyingKey
 from pnf.static_files import RevalidatingStaticFiles
+from pnf.web_guard import same_origin
 
 from .broker import DEFAULT_MAX_LOTS, DEFAULT_PRODUCT, KiteBroker
 from .gateway import KiteError, KiteGateway, SessionExpired
 from .order_relay import RelayAuth, check_settings
 
 STATIC = Path(__file__).parent / "static"
-LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -71,19 +70,6 @@ def install(app: FastAPI) -> None:
     """Add the Kite routes and static files to `app`; app.state.broker must be set at startup."""
     app.include_router(router)
     app.mount("/kite/static", RevalidatingStaticFiles(directory=STATIC), name="kite-static")
-
-
-def same_origin(host: str | None, origin: str | None) -> bool:
-    """True for a request from this app's own page (see the module docstring)."""
-    if not host:
-        return False
-    hostname = host.rsplit(":", 1)[0] if not host.endswith("]") else host
-    if hostname not in LOOPBACK:
-        return False
-    if origin is None:
-        return True  # same-origin GETs and top-level navigations may omit it
-    parts = urlsplit(origin)
-    return parts.scheme in ("http", "https") and parts.netloc == host
 
 
 def check_origin(request: Request) -> None:
@@ -129,7 +115,8 @@ async def callback(request: Request, request_token: str = "", status: str = "", 
     """Kite's redirect after login. Errors are shown on the page it returns to."""
     broker = broker_of(request)
     if status != "success" or not request_token:
-        broker.report("Kite login was cancelled or failed - connect Kite again.")
+        if broker.cancel_login(state):  # not for a /callback no login of ours started
+            broker.report("Kite login was cancelled or failed - connect Kite again.")
     else:
         try:
             await broker.complete_login(request_token, state)

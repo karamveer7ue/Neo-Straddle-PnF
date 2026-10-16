@@ -5,6 +5,7 @@ import logging
 
 import uvicorn
 
+from .local_files import keep_files_private
 from .tls import ensure_cert
 
 
@@ -13,6 +14,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    keep_files_private()  # before anything is written (logs, state files, certificates)
     cert, key = ensure_cert()  # HTTPS: Kite redirects only to an https URL after login
     # Bound to localhost only: the server holds a trading session.
     uvicorn.run(

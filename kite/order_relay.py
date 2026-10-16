@@ -7,9 +7,10 @@ placement, modification and cancellation go through it (the only calls Kite
 checks the IP of); everything else still goes straight to Kite.
 
 Each relayed request is signed with the shared secret KITE_RELAY_SECRET:
-X-Relay-Signature = hex HMAC-SHA256 of "<timestamp>\\n<METHOD>\\n<path>\\n<body>",
-which the relay checks (and refuses after 60 seconds, so a captured request
-cannot be replayed).
+X-Relay-Signature = hex HMAC-SHA256 of "<timestamp>\\n<METHOD>\\n<path>\\n
+<authorization>\\n<content-type>\\n<x-kite-version>\\n<body>" - everything the
+relay forwards - which the relay checks, refuses after 60 seconds, and accepts
+only once, so a captured request can be neither changed nor sent again.
 
     .venv/bin/python -m kite.order_relay check   # is the relay reachable, and its outgoing IP
     .venv/bin/python -m kite.order_relay php     # write relay-upload/kite-route.php with the secret filled in
@@ -19,6 +20,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -33,11 +35,27 @@ SECRET_PLACEHOLDER = "PASTE-KITE_RELAY_SECRET-FROM-.env-HERE"
 RELAYED_METHODS = ("POST", "PUT", "DELETE")
 HOST_REFUSALS = (401, 403, 404, 405)  # web-host replies that mean the relay script never ran
 MIN_SECRET_LENGTH = 32
+SECRET_CHARS = re.compile(r"[A-Za-z0-9_-]+")  # pasted into a PHP string literal by write_php
+# The template's overrides for the app's tests; the upload copy has them taken out.
+TEST_OVERRIDES = {
+    "getenv('KITE_ROUTE_UPSTREAM') ?: KITE_API": "KITE_API",
+    "$override = getenv('KITE_ROUTE_SEEN_FILE');  // the app's tests only": "$override = '';",
+}
 
 
-def signature(secret: str, timestamp: str, method: str, target: str, body: bytes) -> str:
-    message = f"{timestamp}\n{method}\n{target}\n".encode() + body
-    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+def signature(
+    secret: str,
+    timestamp: str,
+    method: str,
+    target: str,
+    body: bytes,
+    auth: str = "",
+    content_type: str = "",
+    kite_version: str = "",
+) -> str:
+    """The relay signature: over the method, path, body and every header the relay forwards."""
+    head = "\n".join([timestamp, method, target, auth, content_type, kite_version, ""])
+    return hmac.new(secret.encode(), head.encode() + body, hashlib.sha256).hexdigest()
 
 
 def check_settings(url: str, secret: str) -> None:
@@ -45,8 +63,16 @@ def check_settings(url: str, secret: str) -> None:
     parts = urlsplit(url)
     if parts.scheme != "https" or not parts.netloc:
         raise RuntimeError(f"KITE_ORDER_RELAY must be an https URL, not {url!r}")
+    check_secret(secret)
+
+
+def check_secret(secret: str) -> None:
     if len(secret) < MIN_SECRET_LENGTH:
         raise RuntimeError(f"KITE_RELAY_SECRET must be at least {MIN_SECRET_LENGTH} characters")
+    if not SECRET_CHARS.fullmatch(secret):
+        raise RuntimeError(
+            "KITE_RELAY_SECRET may hold only letters, digits, '-' and '_' (e.g. 64 hex digits)"
+        )
 
 
 class RelayAuth(requests.auth.AuthBase):
@@ -68,10 +94,20 @@ class RelayAuth(requests.auth.AuthBase):
             body = r.body or b""
             body = body.encode() if isinstance(body, str) else body
             timestamp = str(int(time.time()))
+            auth = r.headers.get("Authorization", "")
             r.headers["X-Relay-Timestamp"] = timestamp
-            r.headers["X-Relay-Signature"] = signature(self.secret, timestamp, r.method, target, body)
-            if "Authorization" in r.headers:
-                r.headers["X-Kite-Authorization"] = r.headers["Authorization"]
+            r.headers["X-Relay-Signature"] = signature(
+                self.secret,
+                timestamp,
+                r.method,
+                target,
+                body,
+                auth=auth,
+                content_type=r.headers.get("Content-Type", ""),
+                kite_version=r.headers.get("X-Kite-Version", ""),
+            )
+            if auth:
+                r.headers["X-Kite-Authorization"] = auth
             r.url = f"{self.url}?path={quote(target, safe='')}"
             r.register_hook("response", self._explain_host_refusal)
         return r
@@ -114,10 +150,16 @@ def whoami(url: str, secret: str, timeout: float = 15) -> dict:
 
 
 def write_php(secret: str, out: Path = PHP_UPLOAD) -> Path:
-    """A copy of kite-route.php with the secret filled in, ready to upload."""
+    """A copy of kite-route.php with the secret filled in, ready to upload (and without
+    the template's test-only overrides, which the web host's environment could set)."""
+    check_secret(secret)
     text = PHP_TEMPLATE.read_text()
     if SECRET_PLACEHOLDER not in text:
         raise RuntimeError(f"{PHP_TEMPLATE} has no secret placeholder")
+    for test_only, production in TEST_OVERRIDES.items():
+        if test_only not in text:
+            raise RuntimeError(f"{PHP_TEMPLATE} has changed: {test_only!r} not found")
+        text = text.replace(test_only, production)
     out.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)
@@ -134,10 +176,12 @@ def main(argv: list[str]) -> int:
     secret = os.getenv("KITE_RELAY_SECRET", "").strip()
     command = argv[0] if argv else "check"
     if command == "php":
-        if len(secret) < MIN_SECRET_LENGTH:
-            print("Set KITE_RELAY_SECRET in .env first.", file=sys.stderr)
+        try:
+            out = write_php(secret)
+        except RuntimeError as exc:
+            print(f"{exc} (set it in .env).", file=sys.stderr)
             return 1
-        print(f"Wrote {write_php(secret)} - upload it to your web host as kite-route.php.")
+        print(f"Wrote {out} - upload it to your web host as kite-route.php.")
         return 0
     if command == "check":
         if not url:

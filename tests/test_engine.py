@@ -815,7 +815,7 @@ def test_errors_shown_on_a_page_go_into_the_alert_log(clock, make_engine):
 
     eng = make_engine()
     pnf.app.app.state.engine = eng  # no lifespan: the endpoint only needs the engine
-    http = TestClient(pnf.app.app)
+    http = TestClient(pnf.app.app, base_url="https://127.0.0.1:8765")
     error = {
         "type": "error",
         "key": "order:42:REJECTED",
@@ -838,7 +838,7 @@ def test_config_endpoint_switches_index_keeping_its_expiry(make_engine):
     eng = make_engine()
     eng.rebuild = lambda: None  # only the stored choices matter here
     pnf.app.app.state.engine = eng
-    http = TestClient(pnf.app.app)
+    http = TestClient(pnf.app.app, base_url="https://127.0.0.1:8765")
     assert http.post(
         "/api/config", json={"underlying": "BANKNIFTY", "days": 3, "expiry": "month2"}
     ).is_success
@@ -879,3 +879,33 @@ def test_history_errors_never_pass_for_an_empty_day(monkeypatch, reply):
     }
     monkeypatch.setattr(gw.client, "historical_data", lambda **kwargs: partial)
     assert len(asyncio.run(gw.history("nse_fo|1", TODAY, TODAY))) == 1
+
+
+def test_the_sdk_log_never_records_login_credentials(tmp_path):
+    import io
+    import logging
+
+    import structlog
+
+    from pnf import neo as neo_mod
+
+    sdk = logging.getLogger("neo_api_client")
+    sdk_format = structlog.stdlib.ProcessorFormatter
+    file_handler = next(h for h in sdk.handlers if isinstance(h.formatter, sdk_format))
+    out = io.StringIO()
+    capture = logging.StreamHandler(out)
+    capture.setFormatter(file_handler.formatter)  # the SDK's own JSON rendering
+    sdk.addHandler(capture)
+    try:
+        neo_mod.NeoGateway("key", "9876543210", "UCC123", "135790")
+        structlog.get_logger("neo_api_client.rest").error(
+            "api_error_response",
+            body={"mobileNumber": "9876543210", "ucc": "UCC123", "mpin": "135790"},
+            query_params={"ucc": "UCC123"},
+            status_code=401,
+        )
+    finally:
+        sdk.removeHandler(capture)
+    text = out.getvalue()
+    assert "api_error_response" in text and "401" in text  # the event itself is kept
+    assert "9876543210" not in text and "UCC123" not in text and "13***90" not in text

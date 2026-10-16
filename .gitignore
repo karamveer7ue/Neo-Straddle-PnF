@@ -8,6 +8,8 @@
 .pnf-alerts.json
 .kite-session.json
 .kite-journal.json
+*.tmp
+.kite-route-seen.json
 certs/
 relay-upload/
 logs/

@@ -10,6 +10,7 @@ import json
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -84,7 +85,13 @@ class FakeKiteApi(BaseHTTPRequestHandler):
 def php_relay(upstream: str):
     """The relay under PHP's built-in server, forwarding to `upstream`; yields its URL."""
     port = free_port()
-    env = {"KITE_RELAY_SECRET": SECRET, "KITE_ROUTE_UPSTREAM": upstream, "PATH": "/usr/bin:/bin"}
+    seen = Path(tempfile.mkdtemp()) / "seen.json"  # the used signatures: never next to the repo's copy
+    env = {
+        "KITE_RELAY_SECRET": SECRET,
+        "KITE_ROUTE_UPSTREAM": upstream,
+        "KITE_ROUTE_SEEN_FILE": str(seen),
+        "PATH": "/usr/bin:/bin",
+    }
     php = subprocess.Popen(
         [PHP, "-S", f"127.0.0.1:{port}", str(RELAY)],
         env=env,
@@ -166,6 +173,41 @@ def test_an_old_request_cannot_be_replayed(relay, monkeypatch):
     assert seen == []
 
 
+def signed_order(relay_url: str) -> requests.PreparedRequest:
+    """An order request as the app sends it to the relay, signed."""
+    req = requests.Request(
+        "POST",
+        "https://api.kite.trade/orders/regular",
+        headers={"Authorization": "token key:tok", "X-Kite-Version": "3"},
+        data={k: str(v) for k, v in ORDER.items() if k != "variety"},
+    ).prepare()
+    return RelayAuth(relay_url, SECRET)(req)
+
+
+def test_a_captured_request_cannot_be_sent_again(relay):
+    relay_url, _, seen = relay
+    order = signed_order(relay_url)
+    with requests.Session() as s:
+        assert s.send(order.copy(), timeout=5).status_code == 200
+        again = s.send(order.copy(), timeout=5)
+    assert again.status_code == 403 and "already sent once" in again.json()["message"]
+    assert len(seen) == 1  # one order reached Kite
+
+
+def test_forwarded_headers_cannot_be_changed(relay):
+    relay_url, _, seen = relay
+    for header, value in (
+        ("X-Kite-Authorization", "token other:account"),  # someone else's Kite session
+        ("Content-Type", "application/json"),
+        ("X-Kite-Version", "999"),
+    ):
+        order = signed_order(relay_url)
+        order.headers[header] = value
+        res = requests.Session().send(order, timeout=5)
+        assert res.status_code == 403 and "bad signature" in res.json()["message"], header
+    assert seen == []
+
+
 def test_only_order_endpoints_are_relayed(relay):
     relay_url, _, seen = relay
     ts = str(int(time.time()))
@@ -216,6 +258,10 @@ def test_relay_settings_are_checked():
         order_relay.check_settings("http://your-domain.example/kite-route.php", SECRET)
     with pytest.raises(RuntimeError, match="at least 32"):
         order_relay.check_settings("https://your-domain.example/kite-route.php", "short")
+    with pytest.raises(RuntimeError, match="only letters"):  # it is pasted into a PHP string
+        order_relay.check_settings(
+            "https://your-domain.example/kite-route.php", "x'; system($_GET[c]); //" + "a" * 20
+        )
     order_relay.check_settings("https://your-domain.example/kite-route.php", SECRET)
 
 
@@ -223,6 +269,9 @@ def test_the_upload_copy_has_the_secret_filled_in(tmp_path):
     out = order_relay.write_php(SECRET, tmp_path / "kite-route.php")
     text = out.read_text()
     assert f"const RELAY_SECRET = '{SECRET}';" in text
+    # The template's test-only overrides are out: the web host's environment cannot redirect
+    # orders (and tokens) elsewhere, or turn the repeat check off.
+    assert "KITE_ROUTE_UPSTREAM" not in text and "KITE_ROUTE_SEEN_FILE" not in text
     assert oct(out.stat().st_mode & 0o777) == "0o600"
     assert order_relay.SECRET_PLACEHOLDER in RELAY.read_text()  # the template keeps no secret
 

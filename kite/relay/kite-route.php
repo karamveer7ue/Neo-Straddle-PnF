@@ -14,10 +14,13 @@
  *   GET ?path=whoami                                       this server's outgoing IPs
  * Every request must be signed by the app with the shared secret:
  *   X-Relay-Timestamp: unix seconds (accepted within 60 s of this server's clock)
- *   X-Relay-Signature: hex HMAC-SHA256 of "<timestamp>\n<METHOD>\n<path>\n<body>"
- * so nobody else can send orders from your IP, and a captured request cannot be
- * replayed later to place the same order again. The Kite access token travels in
- * the request (Authorization) and is never stored or logged here.
+ *   X-Relay-Signature: hex HMAC-SHA256 of
+ *     "<timestamp>\n<METHOD>\n<path>\n<authorization>\n<content-type>\n<x-kite-version>\n<body>"
+ * so nobody else can send orders from your IP, nothing that is forwarded can be
+ * changed, and a captured request cannot be sent again: a signature is accepted
+ * once (the hashes of recent ones are kept in SEEN_FILE, outside the web root).
+ * The Kite access token travels in the request (Authorization) and is never
+ * stored or logged here.
  *
  * Kite's reply (status code and body) is passed back unchanged. The relay's own
  * errors use Kite's error format, so the app handles them like Kite's:
@@ -40,6 +43,9 @@ const MAX_CLOCK_SKEW = 60;  // seconds
 // `python -m kite.order_relay check` shows the address of this version: register that one.
 const KITE_IP_VERSION = 4;
 const ORDER_PATH = '#^/orders/(regular|amo|co|iceberg|auction)(/[A-Za-z0-9]+)?$#';
+// Hashes of the signatures already used, so a captured order request cannot be sent twice.
+// Kept next to the web root's folder (not served); falls back to the system temp folder.
+const SEEN_FILE = '.kite-route-seen.json';
 
 function reply(int $status, string $body, string $contentType = 'application/json'): void
 {
@@ -80,6 +86,47 @@ function request_headers(): array
     return $headers;
 }
 
+/** Where the used signatures are kept: the first writable of the places below. */
+function seen_file(): string
+{
+    $override = getenv('KITE_ROUTE_SEEN_FILE');  // the app's tests only
+    if ($override) {
+        return $override;
+    }
+    foreach ([dirname(__DIR__), sys_get_temp_dir()] as $dir) {
+        if (is_dir($dir) && is_writable($dir)) {
+            return $dir . '/' . SEEN_FILE;
+        }
+    }
+    fail(403, 'PermissionException', 'nowhere to record used requests (make the folder above this file writable).');
+}
+
+/** True the first time a signature is seen within its validity window; false for a repeat. */
+function first_use(string $signature): bool
+{
+    $fh = @fopen(seen_file(), 'c+');
+    if ($fh === false || !flock($fh, LOCK_EX)) {
+        fail(403, 'PermissionException', 'could not record this request (is the folder above this file writable?).');
+    }
+    $seen = json_decode((string) stream_get_contents($fh), true);
+    $seen = is_array($seen) ? $seen : [];
+    $now = time();
+    // A signature is valid for at most 2 x MAX_CLOCK_SKEW (a timestamp up to that far ahead).
+    $seen = array_filter($seen, fn ($t) => is_int($t) && $now - $t <= 2 * MAX_CLOCK_SKEW);
+    $key = hash('sha256', $signature);
+    $fresh = !isset($seen[$key]);
+    if ($fresh) {
+        $seen[$key] = $now;
+        ftruncate($fh, 0);
+        rewind($fh);
+        fwrite($fh, (string) json_encode($seen));
+        fflush($fh);
+    }
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $fresh;
+}
+
 function ip_resolve(int $version): int
 {
     return $version === 6 ? CURL_IPRESOLVE_V6 : CURL_IPRESOLVE_V4;
@@ -108,16 +155,22 @@ $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? '');
 $target = isset($_GET['path']) && is_string($_GET['path']) ? $_GET['path'] : '';
 $body = (string) file_get_contents('php://input');
 $headers = request_headers();
+$auth = $headers['x-kite-authorization'] ?? ($headers['authorization'] ?? '');
+$requestType = $headers['content-type'] ?? '';
+$kiteVersion = $headers['x-kite-version'] ?? '';
 
-// Every request is signed: check the clock first, then the signature.
+// Every request is signed, including every header that is forwarded: check the clock
+// first, then the signature.
 $timestamp = $headers['x-relay-timestamp'] ?? '';
 $signature = strtolower($headers['x-relay-signature'] ?? '');
 if (!ctype_digit($timestamp) || abs(time() - (int) $timestamp) > MAX_CLOCK_SKEW) {
     fail(403, 'PermissionException', 'missing or stale timestamp (are both clocks right?).');
 }
-$expected = hash_hmac('sha256', $timestamp . "\n" . $method . "\n" . $target . "\n" . $body, $secret);
+$signed = implode("\n", [$timestamp, $method, $target, $auth, $requestType, $kiteVersion, $body]);
+$expected = hash_hmac('sha256', $signed, $secret);
 if (!hash_equals($expected, $signature)) {
-    fail(403, 'PermissionException', 'bad signature (does RELAY_SECRET match KITE_RELAY_SECRET in .env?).');
+    fail(403, 'PermissionException', 'bad signature (does RELAY_SECRET match KITE_RELAY_SECRET in .env, '
+        . 'and is this the kite-route.php written by this version of the app?).');
 }
 
 if ($method === 'GET' && $target === 'whoami') {
@@ -138,19 +191,21 @@ if (!preg_match(ORDER_PATH, $path) || strpos($target, '//') !== false) {
     fail(403, 'PermissionException', 'only Kite order endpoints are relayed.');
 }
 
-$auth = $headers['x-kite-authorization'] ?? ($headers['authorization'] ?? '');
 if (!preg_match('/^token [A-Za-z0-9]+:[A-Za-z0-9]+$/', $auth)) {
     fail(403, 'PermissionException', 'missing Kite authorization.');
 }
+if (!first_use($signature)) {
+    fail(403, 'PermissionException', 'this request was already sent once; a repeat is refused.');
+}
 
-$upstream = getenv('KITE_ROUTE_UPSTREAM') ?: KITE_API;  // overridden only by the app's tests
+$upstream = getenv('KITE_ROUTE_UPSTREAM') ?: KITE_API;  // the env: the app's tests only, not in the upload copy
 $forward = [
     'Authorization: ' . $auth,
-    'X-Kite-Version: ' . ($headers['x-kite-version'] ?? '3'),
+    'X-Kite-Version: ' . ($kiteVersion !== '' ? $kiteVersion : '3'),
     'User-Agent: pnf-kite-route/1',
 ];
-if (isset($headers['content-type'])) {
-    $forward[] = 'Content-Type: ' . $headers['content-type'];
+if ($requestType !== '') {
+    $forward[] = 'Content-Type: ' . $requestType;
 }
 
 $contentType = 'application/json';

@@ -26,6 +26,7 @@ from .series import (
     UnderlyingKey,
 )
 from .static_files import RevalidatingStaticFiles
+from .web_guard import LocalOnly
 
 STATIC = Path(__file__).parent / "static"
 
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Straddle P&F", lifespan=lifespan)
+app.add_middleware(LocalOnly)  # other sites' pages: no requests, WebSockets or framing
 app.mount("/static", RevalidatingStaticFiles(directory=STATIC), name="static")
 kite.web.install(app)  # order placement and positions through Zerodha Kite
 

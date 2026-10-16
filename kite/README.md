@@ -67,8 +67,11 @@ this app ──(sign)──> https://your-domain.example/kite-route.php ──> 
 
 - **Only orders go through it:** placing, modifying and cancelling (the only calls Kite checks the IP of).
   Positions, the order book and the login go straight to Kite, as before.
-- **Signed:** every relayed request carries an HMAC-SHA256 signature made with `KITE_RELAY_SECRET` and a timestamp.
-  The relay refuses anything unsigned, signed with another secret, older than 60 seconds (so a captured request cannot be replayed to place the same order twice), or for any other Kite endpoint, so nobody else can send orders from your IP.
+- **Signed:** every relayed request carries an HMAC-SHA256 signature made with `KITE_RELAY_SECRET` and a timestamp, over everything the relay forwards (the order, the Kite authorization and the other headers).
+  The relay refuses anything unsigned, signed with another secret, changed after signing, older than 60 seconds, already sent once, or for any other Kite endpoint, so nobody else can send orders from your IP and a captured request cannot place the same order twice.
+  To refuse repeats it keeps the hashes of recent signatures (for 2 minutes) in `.kite-route-seen.json` in the folder above `kite-route.php` (outside `public_html`), or in the system temp folder if that one is not writable.
+- **After updating the app, upload a fresh copy:** the signature format can change between versions, and an older `kite-route.php` then refuses every order ("bad signature"; nothing is sent).
+  Run step 2 below again and upload the new copy.
 - **Nothing stored:** the Kite access token passes through with each order and is neither stored nor logged on the host.
 - **Errors:** the relay's own refusals come back as Kite-style errors ("Order relay: ..." in the toast).
   If the relay cannot reach Kite, the order counts as "outcome unknown" (check the position before retrying), like any other network failure.

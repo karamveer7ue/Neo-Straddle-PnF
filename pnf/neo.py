@@ -91,8 +91,30 @@ def is_error(response) -> bool:
     return any(k in response for k in ("Error", "error", "Error Message", "errMsg"))
 
 
+class DropRequestData(logging.Filter):
+    """The SDK logs every failed request with its body and query: for a login that
+    is the mobile number and UCC in clear and the MPIN masked to only 2 + 2 of its
+    6 digits, written to logs/. Those two fields are left out; the rest stays."""
+
+    FIELDS = ("body", "query_params")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        event = record.msg
+        if isinstance(event, dict) and any(event.get(k) for k in self.FIELDS):
+            record.msg = {**event, **{k: "[not logged]" for k in self.FIELDS if event.get(k)}}
+        return True
+
+
+def scrub_sdk_log() -> None:
+    """Put DropRequestData on every handler of the SDK's logger (its file and console)."""
+    for handler in logging.getLogger("neo_api_client").handlers:
+        if not any(isinstance(f, DropRequestData) for f in handler.filters):
+            handler.addFilter(DropRequestData())
+
+
 class NeoGateway:
     def __init__(self, consumer_key: str, mobile_number: str, ucc: str, mpin: str):
+        scrub_sdk_log()
         self.client = NeoAPI(consumer_key=consumer_key, environment="prod")
         self._mobile_number = mobile_number
         self._ucc = ucc
@@ -269,11 +291,12 @@ class NeoGateway:
         response = await self._call(
             self.client.totp_login, mobile_number=self._mobile_number, ucc=self._ucc, totp=totp
         )
+        # Only the error's own message: the raw reply (shown on the page) may carry session tokens.
         if is_error(response):
-            raise NeoError(f"TOTP login failed: {describe(response) or response}")
+            raise NeoError(f"TOTP login failed: {describe(response) or 'no reason given'}")
         response = await self._call(self.client.totp_validate, mpin=self._mpin)
         if is_error(response) or not self.client.configuration.edit_token:
-            raise NeoError(f"MPIN validation failed: {describe(response) or response}")
+            raise NeoError(f"MPIN validation failed: {describe(response) or 'no session token in the reply'}")
         self.logged_in = True
 
     def create_feed(self):

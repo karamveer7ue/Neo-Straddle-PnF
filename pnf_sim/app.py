@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from pnf.neo import NeoError, NeoGateway
 from pnf.series import DEFAULT_UNDERLYING, UNDERLYINGS, UnderlyingKey
 from pnf.static_files import RevalidatingStaticFiles
+from pnf.web_guard import LocalOnly
 
 from .replay import (
     MAX_RANGE_DAYS,
@@ -60,6 +61,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Straddle simulator", lifespan=lifespan)
+app.add_middleware(LocalOnly)  # other sites' pages: no requests, WebSockets or framing
 app.mount("/static", RevalidatingStaticFiles(directory=LIVE_STATIC), name="static")
 app.mount("/sim", RevalidatingStaticFiles(directory=SIM_STATIC), name="sim")
 
