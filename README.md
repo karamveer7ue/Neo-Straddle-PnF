@@ -30,7 +30,7 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 ## Features
 
 - **NIFTY or SENSEX:** switch with one click; NIFTY options come from NSE, SENSEX options from BSE.
-- **Spot and future:** the index price and the near-month future price, each with its change since the previous close, live in the top bar.
+- **Spot and future:** the index price and the near-month future price, each with its change since the previous close in points and %, live in the top bar.
 - **Three straddles at once:** ATM and two side strikes (± 200 for NIFTY, ± 500 for SENSEX), laid out horizontally.
 - **Point & Figure on 1-minute closes:** box size fixed at 0.5% of the first straddle close in the window, 3-box reversal.
 - **ATM from today's open or your own strike:** the default ATM is the index's open rounded to the nearest strike; type any strike to override it.
@@ -249,7 +249,7 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | Control | What it does |
 | --- | --- |
 | **NIFTY / SENSEX** | Switches all three charts to the other index. |
-| **Spot / Fut** | The index price and the near-month future (e.g. NIFTY26OCTFUT; hover for the contract and expiry), with their change since the previous close. The future rolls to the next month after expiry. |
+| **Spot / Fut** | The index price and the near-month future (e.g. NIFTY26OCTFUT; hover for the contract and expiry), with their change since the previous close in points and % (just % on windows narrower than 1180px). The future rolls to the next month after expiry. |
 | **Expiry** | Switches all three charts to another contract. |
 | **ATM** | Type a strike (a multiple of 50 for NIFTY, 100 for SENSEX) and press Enter or **Apply**. Esc discards the edit. |
 | **Auto** | Goes back to the ATM from today's index open. Hover it to see the open and the strike it gives. |

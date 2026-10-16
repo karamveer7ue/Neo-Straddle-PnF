@@ -770,7 +770,6 @@ button, input, select { font: inherit; color: inherit; }
 
 @media (max-width: 1700px) {
   .brand { display: none; } /* the index toggle names what is on screen */
-  .stats .chg .abs { display: none; } /* keep just the % change */
 }
 
 @media (max-width: 1440px) {
@@ -778,13 +777,16 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 @media (max-width: 1366px) {
-  .stats .chg { display: none; }
   .topbar { column-gap: 12px; }
   .segmented button { padding: 0 9px; }
   .controls { gap: 6px; }
   .expiry-field span { display: none; } /* "13 Oct · weekly" speaks for itself */
   .login input { width: 82px; }
   .login .btn { padding: 0 10px; }
+}
+
+@media (max-width: 1180px) {
+  .stats .chg .abs { display: none; } /* keep just the % change */
 }
 
 @media (max-width: 1100px) {
