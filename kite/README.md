@@ -40,7 +40,8 @@ Each order's outcome appears as a toast: "Sold NIFTY 22,300 (13 Oct) straddle - 
 
 4. Restart the app, then click **Connect Kite** in the top bar and log in on Kite's page; it returns you to the charts.
 
-With the keys empty, the page shows **Kite off** and the Sell buttons stay disabled; the charts work as before.
+Once connected, the top bar shows **TradeOn** (click it to disconnect).
+With the keys empty, the page shows **TradeOff** and the Sell buttons stay disabled; the charts work as before.
 
 Optional settings in `.env`:
 

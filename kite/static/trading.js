@@ -216,12 +216,11 @@ connectBtn.href = '/kite/login';
 const userPill = el('button', 'pill kite-user');
 userPill.type = 'button';
 userPill.append(el('i'), el('span'));
-const offChip = el('span', 'pill kite-off', 'Kite off');
+const offChip = el('span', 'pill kite-off', 'TradeOff');
 account.append(connectBtn, userPill, offChip);
 
 userPill.addEventListener('click', async () => {
-  const u = k.server?.user;
-  if (!window.confirm(`Disconnect Kite${u ? ` (${u.id})` : ''}? Orders stop until you connect again.`)) return;
+  if (!window.confirm('Disconnect Kite? Orders stop until you connect again.')) return;
   try {
     await post('/api/kite/logout', {});
   } catch (err) {
@@ -239,9 +238,9 @@ function renderAccount() {
   userPill.hidden = !configured || !s.connected;
   userPill.classList.toggle('live', k.wsUp);
   userPill.classList.toggle('pending', !k.wsUp);
-  userPill.querySelector('span').textContent = s?.user ? `Kite ${s.user.id}` : 'Kite';
+  userPill.querySelector('span').textContent = 'TradeOn';
   userPill.title = k.wsUp
-    ? `Connected to Kite as ${s?.user?.name || s?.user?.id} · ${s?.product} orders · click to disconnect`
+    ? `Connected to Kite · ${s?.product} orders · click to disconnect`
     : 'Reconnecting to the local server...';
 }
 
