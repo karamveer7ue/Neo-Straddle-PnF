@@ -35,7 +35,7 @@ To run the simulator on its own:
 | **Timeline** | Drag to jump to any minute (keyboard: left and right arrows step one minute). The thin bar below it shows the time left until the next minute appears. |
 | **Clock** | The simulated time (to the second) and the minute count. |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
-| **View (VWAP / VWMA 10, box size), bell** | As on the live page. |
+| **View (VWAP / VWMA 10, box size), bell, expand** | As on the live page. |
 
 ## How a run works
 

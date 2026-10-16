@@ -1,5 +1,6 @@
 import { raiseAlert, requestNotifications, setSoundEnabled, soundEnabled } from './alerts.js';
 import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from './chart.js';
+import { mountExpand } from './expand.js';
 import { alertWanted, istDay } from './pnf.js';
 import { loadOverlays, mountMenu, saveOverlays } from './view.js';
 import { mountTrading, updateTrading } from '/kite/static/trading.js';
@@ -108,6 +109,7 @@ function buildPanels(charts) {
     const root = els.template.content.firstElementChild.cloneNode(true);
     root.classList.toggle('atm', def.offset === 0);
     els.charts.append(root);
+    mountExpand(root, def.offset);
     const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip });
     panel.setCell(state.cellOverride);
     panel.setOverlays(state.overlays);

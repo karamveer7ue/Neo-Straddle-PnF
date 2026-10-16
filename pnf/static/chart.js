@@ -91,6 +91,7 @@ export class PnfPanel {
     this.follow = true;
     this.hover = null; // {x, y} in CSS px within the plot
     this.width = 0;
+    this.originX = 0; // blank space left of the first column when all columns fit
     this.height = 0;
     this.frame = 0;
 
@@ -224,6 +225,8 @@ export class PnfPanel {
     const c = this.cell;
     this.spacer.style.width = `${cols * c + AXIS}px`;
     this.spacer.style.height = `${rows * c + HEADER}px`;
+    // Columns that fit without scrolling sit against the price axis, as they do once they scroll.
+    this.originX = Math.max(0, Math.floor(this.width - AXIS - cols * c));
 
     if (this.follow && pnf?.columns.length) {
       this.scroller.scrollLeft = this.scroller.scrollWidth - this.scroller.clientWidth;
@@ -246,8 +249,13 @@ export class PnfPanel {
     return this.pnf?.vwap.at(-1) ?? null;
   }
 
+  /** Chart x of the plot's left edge: the scroll offset, less the blank space when all columns fit. */
+  get viewLeft() {
+    return this.scroller.scrollLeft - this.originX;
+  }
+
   colX(i) {
-    return (i + PAD_COLS_LEFT) * this.cell - this.scroller.scrollLeft;
+    return (i + PAD_COLS_LEFT) * this.cell - this.viewLeft;
   }
 
   rowY(row) {
@@ -277,8 +285,8 @@ export class PnfPanel {
     const labelStep = LABEL_STEPS.find((s) => s * c >= 22) ?? LABEL_STEPS[LABEL_STEPS.length - 1];
     const firstRow = Math.floor(this.topRow - (H - HEADER + this.scroller.scrollTop) / c) - 1;
     const lastRow = Math.ceil(this.topRow - (this.scroller.scrollTop - c) / c) + 1;
-    const firstCol = Math.max(0, Math.floor(this.scroller.scrollLeft / c) - PAD_COLS_LEFT - 1);
-    const lastCol = Math.min(pnf.columns.length - 1, Math.ceil((this.scroller.scrollLeft + chartW) / c));
+    const firstCol = Math.max(0, Math.floor(this.viewLeft / c) - PAD_COLS_LEFT - 1);
+    const lastCol = Math.min(pnf.columns.length - 1, Math.ceil((this.viewLeft + chartW) / c));
 
     // Chart body
     ctx.save();
@@ -306,7 +314,7 @@ export class PnfPanel {
     }
     if (c >= 10) {
       ctx.strokeStyle = t.grid;
-      const startCol = Math.floor(this.scroller.scrollLeft / c) - PAD_COLS_LEFT;
+      const startCol = Math.floor(this.viewLeft / c) - PAD_COLS_LEFT;
       for (let i = startCol; i <= startCol + Math.ceil(chartW / c) + 1; i++) {
         const x = Math.round(this.colX(i)) + 0.5;
         ctx.beginPath();
@@ -489,6 +497,8 @@ export class PnfPanel {
       if (i === pinned && i + 1 < marks.length) {
         x = Math.min(x, this.colX(marks[i + 1].col) - w - 10); // pushed off by the next label
       }
+      // A session only a few columns old would run under the price axis: end it at the edge.
+      if (i === marks.length - 1) x = Math.min(x, chartW - w - 6);
       if (x > chartW || x + w < 0 || (i !== pinned && x < minX)) return;
       ctx.fillText(label, x, HEADER / 2);
       minX = x + w + 10;
@@ -546,7 +556,7 @@ export class PnfPanel {
     const h = this.hover;
     if (!h || !this.pnf || h.x >= this.width - AXIS || h.y < HEADER) return null;
     const c = this.cell;
-    const col = Math.floor((h.x + this.scroller.scrollLeft) / c) - PAD_COLS_LEFT;
+    const col = Math.floor((h.x + this.viewLeft) / c) - PAD_COLS_LEFT;
     const row = this.topRow - Math.floor((h.y - HEADER + this.scroller.scrollTop) / c);
     const column = this.pnf.columns[col];
     const box = column?.boxes.find((b) => b.row === row) ?? null;

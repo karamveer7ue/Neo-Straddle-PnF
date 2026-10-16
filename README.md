@@ -267,6 +267,10 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 Inside each panel:
 
 - **Header:** straddle price, change since the session's first close, CE and PE prices, VWAP and VWMA 10 (when shown), and the latest signal.
+- **Expand** (the icon right of the price): widens that chart over the other two; the top bar stays as it is and the chart keeps its height.
+  The icon again, or Esc, brings back all three.
+  The other two charts keep updating behind it, and their alerts (toast, sound, notification) still show on top.
+  Windows narrower than 1100px stack the charts at full width, so there the icon is hidden.
 - **Meta line:** box size, reversal, number of columns, and the first session in the window.
 - **Chart:** the dashed blue line and blue axis tag mark the current price; the yellow and light-black tags mark the current VWAP and VWMA 10; dotted vertical lines separate sessions.
 - **Hover:** shows the box's price, the minute it printed, the VWAP and VWMA 10 at that column, and the signal name if it is a signal box.
@@ -363,7 +367,7 @@ Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY`
 | **Timeline** | Drag to jump to any minute; the left and right arrow keys step exactly one minute (also while the timeline has focus). The thin bar under it shows the time left until the current minute completes. |
 | **Clock** | The simulated time, to the second, and the minute count (for example, "minute 296 of 375"). |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
-| **View (VWAP / VWMA 10, box size), bell** | The same as on the live page; the simulator remembers its own VWAP/VWMA choice. |
+| **View (VWAP / VWMA 10, box size), bell, expand** | The same as on the live page; the simulator remembers its own VWAP/VWMA choice. |
 
 Speeds:
 
@@ -448,6 +452,7 @@ node --test tests/*.test.mjs                   # P&F engine, simulator playback 
 | `pnf/static/chart.js` | Canvas chart renderer (draws only the visible area, so long histories stay fast). |
 | `pnf/static/axis.js` | Price-axis tag layout, so the price, VWAP and VWMA tags never overlap. |
 | `pnf/static/alerts.js` | Toasts, sounds and system notifications. |
+| `pnf/static/expand.js` | The expand button that widens one chart over the other two (live page and simulator). |
 | `pnf/static/app.js` | Page wiring: controls, server messages, panel headers. |
 | `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits) and `POST /api/simulate` (builds a run); serves the live app's static files read-only. |
 | `pnf_sim/replay.py` | Builds a simulator run: date checks, expiries offered, strikes from the start day's open, straddle series with each minute's price path, previous closes for the spot. |
