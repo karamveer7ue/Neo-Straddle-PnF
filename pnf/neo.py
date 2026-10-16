@@ -250,15 +250,18 @@ class NeoGateway:
             to_date=to_date.isoformat(),
         )
         # Status casing varies and "Partial response" still carries valid
-        # candles - judge by error codes and status, not the message.
+        # candles - judge by the candles first. Without any, only a plain success
+        # reply means "no candles": every other shape (an error in any of Neo's
+        # forms, a non-JSON page) must not pass for an empty day, which the engine
+        # would take for a holiday and cache.
+        data = response.get("data") if isinstance(response, dict) else None
+        candles = data.get("candles") if isinstance(data, dict) else None
+        if isinstance(candles, list) and candles:
+            return candles
         status = str(response.get("status", "")).lower() if isinstance(response, dict) else ""
-        if (
-            not isinstance(response, dict)
-            or error_code(response) is not None
-            or status not in ("success", "")
-        ):
+        if not isinstance(response, dict) or is_error(response) or status not in ("success", ""):
             raise NeoError(f"History failed for {neosymbol} {from_date}..{to_date}: {response}")
-        return (response.get("data") or {}).get("candles") or []
+        return []
 
     # ---------------- Session (TOTP + MPIN) ----------------
 

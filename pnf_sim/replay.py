@@ -245,8 +245,16 @@ async def contract_lot_size(gw: NeoGateway, u: Underlying, expiry: date) -> int:
     return FALLBACK_LOT_SIZES[u.key]
 
 
-def default_dates(today: date) -> tuple[date, date]:
-    """The most recent weekday before today, as both start and end."""
+async def latest_session(gw: NeoGateway, u: Underlying, today: date) -> date | None:
+    """The newest trading session before today, from the index's history (None if unavailable)."""
+    return max((session_date(ts) for ts in await _index_before(gw, u, today)), default=None)
+
+
+def default_dates(today: date, latest: date | None = None) -> tuple[date, date]:
+    """The most recent session before today, as both start and end: `latest` when
+    known, else the last weekday (which may be a holiday)."""
+    if latest is not None:
+        return latest, latest
     d = today - timedelta(days=1)
     while d.weekday() >= 5:
         d -= timedelta(days=1)

@@ -106,6 +106,11 @@ class FakeKite:
         self.fail_next: list[Exception] = []  # raised by the next calls, in order
         self.reject: dict[str, str] = {}  # tradingsymbol -> rejection message
         self.hold_open: set[str] = set()  # tradingsymbols whose orders stay OPEN
+        # Status of an order held open; Kite's early states (VALIDATION PENDING, ...) may
+        # not have pending_quantity filled in yet, which `hold_unset_pending` models.
+        self.hold_status = "OPEN"
+        self.hold_unset_pending = False
+        self.lag_orders = 0  # orders() leaves out this many of the newest orders (Kite lagging)
         self.calls: list[str] = []
         self.before: dict = {}  # method name -> fn(fake), run as that call starts (e.g. to raise)
         self.lag_fills = 0  # positions() leaves out this many of the newest fills (Kite lagging)
@@ -207,7 +212,9 @@ class FakeKite:
         }
         if symbol in self.reject:
             order.update(status="REJECTED", status_message=self.reject[symbol], pending_quantity=0)
-        elif symbol not in self.hold_open:
+        elif symbol in self.hold_open:
+            order.update(status=self.hold_status, pending_quantity=0 if self.hold_unset_pending else quantity)
+        else:
             fill = self.price(symbol)
             order.update(status="COMPLETE", filled_quantity=quantity, pending_quantity=0, average_price=fill)
             self.fills.append({**params, "quantity": quantity, "price": fill})
@@ -234,7 +241,10 @@ class FakeKite:
 
     def orders(self):
         self._check("orders")
-        return [dict(o) for o in self.order_book]
+        book = (
+            self.order_book[: len(self.order_book) - self.lag_orders] if self.lag_orders else self.order_book
+        )
+        return [dict(o) for o in book]
 
     def positions(self):
         """Net rows per (exchange, tradingsymbol, product), with Kite's P&L formula."""

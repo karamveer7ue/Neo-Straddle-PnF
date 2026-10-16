@@ -171,6 +171,24 @@ def test_pe_is_held_back_when_the_ce_is_refused(connected):
     assert fake.placed == []  # the PE was never sent
 
 
+def test_the_held_back_pe_says_why_the_ce_failed(connected, monkeypatch):
+    b, fake = connected()
+    fake.fail_next = [requests.ReadTimeout("read timed out")]
+    res = asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 65))
+    assert res["results"][0]["unknown"]
+    assert (
+        res["results"][1]["error"] == "PE not sent: the CE order's outcome is unknown - check the positions."
+    )
+    assert fake.placed == []
+
+    async def part_placed(**kwargs):
+        return [{"order_id": "1"}, {"error": "Insufficient funds"}]
+
+    monkeypatch.setattr(b.gw, "place_market_order", part_placed)
+    res = asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 65))
+    assert res["results"][1]["error"] == "PE not sent: only part of the CE was placed - check the positions."
+
+
 def test_sell_sends_both_legs_at_once_without_waiting_for_fills(connected):
     b, fake = connected()
     fake.calls.clear()
@@ -232,6 +250,44 @@ def test_exit_while_an_exit_is_still_working_places_nothing(connected):
     key = "NIFTY|2026-10-13|22300"
     asyncio.run(b.exit(key, 1))
     with pytest.raises(KiteError, match="Nothing to exit"):
+        asyncio.run(b.exit(key, 1))
+    assert len(fake.placed) == 4
+
+
+def test_an_exit_kite_has_not_validated_yet_still_counts_as_being_exited(connected):
+    b, fake = connected()
+    asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 130))
+    # Just placed, the buy-backs are still being validated, with no pending_quantity yet.
+    fake.hold_open = {CE, PE}
+    fake.hold_status, fake.hold_unset_pending = "VALIDATION PENDING", True
+    key = "NIFTY|2026-10-13|22300"
+    asyncio.run(b.exit(key, 1))
+    with pytest.raises(KiteError, match="Nothing to exit"):
+        asyncio.run(b.exit(key, 1))  # a second Exit Full must not turn the legs long
+    assert len(fake.placed) == 4
+
+
+def test_exit_waits_for_the_order_book_to_list_an_exit_just_placed(connected, monkeypatch):
+    monkeypatch.setattr(broker_mod, "REREAD_DELAY", 0)
+    b, fake = connected()
+    asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 130))
+    fake.hold_open = {CE, PE}
+    key = "NIFTY|2026-10-13|22300"
+    asyncio.run(b.exit(key, 1))
+    fake.lag_orders = 2  # Kite's order book does not list the two buy-backs yet
+
+    def catch_up(f):
+        if f.calls.count("orders") >= 3:
+            f.lag_orders = 0
+
+    fake.before["orders"] = catch_up
+    with pytest.raises(KiteError, match="Nothing to exit"):
+        asyncio.run(b.exit(key, 1))
+    assert len(fake.placed) == 4
+    # An order book that never catches up stops the exit rather than doubling it.
+    fake.before.clear()
+    fake.lag_orders = 2
+    with pytest.raises(KiteError, match="not caught up"):
         asyncio.run(b.exit(key, 1))
     assert len(fake.placed) == 4
 
@@ -507,6 +563,9 @@ def test_autoslice_reply_with_a_failed_slice():
     assert parse_slices(reply) == [{"order_id": "1"}, {"order_id": "2"}, {"error": "Insufficient funds"}]
     assert parse_slices({"order_id": "9"}) == [{"order_id": "9"}]
     assert parse_slices("250101000012345") == [{"order_id": "250101000012345"}]  # place_order's reply
+    # The shape the SDK's docstring describes: the children are the slices.
+    children = {"order_id": "P", "children": [{"order_id": "3"}, {"error": {"message": "Margin"}}]}
+    assert parse_slices(children) == [{"order_id": "3"}, {"error": "Margin"}]
 
 
 # ---------------- Endpoints ----------------
@@ -625,3 +684,22 @@ def test_a_failed_contract_load_is_not_retried_on_every_poll(clock, files):
     assert b.state_json()["message"].startswith("Could not load Kite contracts")
     asyncio.run(b.refresh())
     assert fake.calls.count("instruments") == 1 and b.book is None
+
+
+def test_contracts_are_loaded_again_once_kites_morning_dump_is_out(clock, files):
+    fake = FakeKite()
+    fake.access_token = "t"
+    b = KiteBroker(KiteGateway("key", "secret", client=fake))
+    b.user = {"id": "AB1234", "name": ""}
+    clock["t"] = datetime(2026, 10, 12, 0, 5, tzinfo=IST)  # just after midnight, yesterday's token
+    asyncio.run(b.refresh())
+    loads = fake.calls.count("instruments")
+    clock["t"] = datetime(2026, 10, 12, 8, 0, tzinfo=IST)
+    asyncio.run(b.refresh())
+    assert fake.calls.count("instruments") == loads
+    clock["t"] = datetime(2026, 10, 12, 8, 31, tzinfo=IST)
+    asyncio.run(b.refresh())
+    assert fake.calls.count("instruments") == 2 * loads
+    clock["t"] = datetime(2026, 10, 12, 14, 0, tzinfo=IST)
+    asyncio.run(b.refresh())
+    assert fake.calls.count("instruments") == 2 * loads

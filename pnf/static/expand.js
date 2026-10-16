@@ -61,7 +61,8 @@ function sync(root, expanded) {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || !current?.isConnected) return;
+  if (e.key !== 'Escape' || !current?.isConnected || e.defaultPrevented) return;
+  if (e.target.closest?.('input, select, textarea')) return; // Esc there discards an edit (e.g. the ATM)
   // Esc closes an open menu or dialog first.
   if (document.querySelector('[role="dialog"]:not([hidden]), .view-panel:not([hidden])')) return;
   restore();

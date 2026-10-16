@@ -57,6 +57,7 @@ LOOP_INTERVAL = 0.25  # seconds; also the live-tick push rate to browsers
 RECONCILE_EVERY_MIN = 5  # refresh today's official candles this often
 FEED_RECONNECT_DELAY = 5
 REBUILD_RETRY_DELAY = 60  # after a failed automatic rebuild
+FAILED_BUILD_RETRY = (60, 15 * 60)  # a build that failed (or lost a chart) is retried: first delay, cap
 CONFIG_FILE = Path(__file__).resolve().parent.parent / ".pnf-config.json"
 ALERTS_FILE = Path(__file__).resolve().parent.parent / ".pnf-alerts.json"
 ALERTS_KEPT = 30  # most recent signal alerts kept in the log
@@ -78,6 +79,7 @@ class Chart:
     history: list[Bar] = field(default_factory=list)
     live: list[Bar] = field(default_factory=list)
     error: str | None = None
+    load_failed: bool = False  # the error is a failed history fetch, worth retrying
 
     @property
     def legs(self) -> list[dict]:
@@ -110,8 +112,18 @@ def settled(candles: list[Candle], now: datetime) -> list[Candle]:
     chart: the browser ignores live prices for a minute it already has a
     bar for, and the server never closes that minute's real bar.
     """
-    cutoff = now.timestamp() - 60 - CANDLE_SETTLE_SECONDS
+    cutoff = settle_cutoff(now)
     return [c for c in candles if c[0] <= cutoff]
+
+
+def settle_cutoff(now: datetime) -> float:
+    """Newest candle start (epoch s) that counts as final at `now`."""
+    return now.timestamp() - 60 - CANDLE_SETTLE_SECONDS
+
+
+def day_before(day: date) -> float:
+    """An epoch second just before `day` starts (IST): the last candle of earlier days."""
+    return datetime.combine(day, time(0), IST).timestamp() - 1
 
 
 class Engine:
@@ -140,8 +152,14 @@ class Engine:
         self.window_dates: list[date] = []
         self.charts: list[Chart] = []
         self.leg_bars: dict[str, list[Candle]] = {}  # leg key -> official 1-min candles
+        # Leg key -> newest candle start its official candles are complete up to. A leg
+        # whose today fetch failed is known only up to yesterday: a chart's history stops
+        # at the earlier of its two legs, so the other leg's today is never paired with a
+        # stale, carried-forward price.
+        self.leg_known: dict[str, float] = {}
         self.built_for: tuple[date, bool] | None = None  # (day, built after the open)
         self._recheck_at: datetime | None = None  # rebuild no earlier than this (provisional holiday)
+        self._traded_on: date | None = None  # a day the feed showed trading on (never a holiday)
         self.generation = 0
 
         # Live state
@@ -167,6 +185,8 @@ class Engine:
         self._loop_task: asyncio.Task | None = None
         self._reconcile_task: asyncio.Task | None = None
         self._last_auto_rebuild = 0.0
+        self._build_failures = 0  # in a row, for the retry backoff
+        self._retry_at: float | None = None  # monotonic time to retry a failed build
 
     # ---------------- Lifecycle ----------------
 
@@ -407,14 +427,27 @@ class Engine:
 
             from_date = history_start(today, self.days)
             leg_keys = [k for c in charts for k in c.leg_keys]
-            leg_bars, today_known_empty = {}, True
+            leg_bars, leg_known, today_known_empty, failed = {}, {}, True, {}
             for i, leg_key in enumerate(leg_keys, 1):
                 self._set_phase("loading", f"Loading {u.key} 1-min history {i}/{len(leg_keys)}...")
-                bars, today_ok, traded = await self._leg_history(leg_key, from_date, today, started)
+                try:
+                    bars, today_ok, traded = await self._leg_history(leg_key, from_date, today, started)
+                except NeoError as exc:  # costs this leg's chart, not all three
+                    log.warning("History failed for %s: %s", leg_key, str(exc)[:200])
+                    failed[leg_key] = str(exc)
+                    bars, today_ok, traded = [], False, False
                 leg_bars[leg_key] = bars
+                leg_known[leg_key] = settle_cutoff(now_ist()) if today_ok else day_before(today)
                 if not today_ok or traded:
                     today_known_empty = False
 
+            for chart in charts:
+                bad = next((k for k in chart.leg_keys if k in failed), None)
+                if bad and not chart.error:
+                    chart.error = f"Could not load the {chart.strike} history - retrying"
+                    chart.load_failed = True
+            if failed and all(c.error for c in charts):
+                raise NeoError(next(iter(failed.values())))
             window = self._window_dates(leg_bars, today, started, today_known_empty)
             # Before 09:30 an empty today cannot yet be told apart from a holiday: build
             # now with today in the window, and check again once at 09:31.
@@ -431,10 +464,13 @@ class Engine:
                 self.spot, self.spot_prev_close = quote["ltp"], quote["prev_close"]
             old_future_key = self.future["key"] if self.future else None
             self.future = future
-            if future_quote and (
-                future["key"] != old_future_key or self.feed_state != "live" or self.future_ltp is None
-            ):
-                self.future_ltp, self.future_prev_close = future_quote["ltp"], future_quote["prev_close"]
+            if future_quote:
+                # The live feed's price is newer than the quote's, but the previous close must
+                # follow the build: a rollover with the feed still live would keep the one
+                # from the day before.
+                if future["key"] != old_future_key or self.feed_state != "live" or self.future_ltp is None:
+                    self.future_ltp = future_quote["ltp"]
+                self.future_prev_close = future_quote["prev_close"]
             elif not future:
                 self.future_ltp = self.future_prev_close = None
             future_changed = (future["key"] if future else None) != old_future_key
@@ -444,7 +480,7 @@ class Engine:
             old_live = {tuple(c.leg_keys): c.live for c in self.charts if c.leg_keys}
             for chart in charts:
                 chart.live = list(old_live.get(tuple(chart.leg_keys), []))
-            self.leg_bars = leg_bars
+            self.leg_bars, self.leg_known = leg_bars, leg_known
             self.window_dates = window
             self.charts = charts
             # The browser learns the new generation from this build's snapshot, so it is
@@ -460,6 +496,7 @@ class Engine:
             recheck = time(9, 16) if started.time() < time(9, 16) else time(9, 31)
             self._recheck_at = datetime.combine(today, recheck, IST) if provisional else None
             self.phase, self.message = "ready", ""
+            self._schedule_retry(failed=any(c.load_failed for c in charts))
             self._push(self.snapshot())
 
             if self.gw.logged_in and (switched or future_changed or set(leg_keys) != old_leg_keys):
@@ -468,7 +505,20 @@ class Engine:
             raise
         except Exception as exc:  # surfaced to the UI
             log.exception("Build failed")
+            self._schedule_retry(failed=True)
             self._set_phase("error", str(exc)[:400])
+
+    def _schedule_retry(self, failed: bool) -> None:
+        """After a build: retry one that failed, or lost a chart, with a growing delay
+        (any time of day - the new-session rebuild runs only on weekdays from 09:16)."""
+        if not failed:
+            self._build_failures, self._retry_at = 0, None
+            return
+        first, cap = FAILED_BUILD_RETRY
+        delay = min(first * 2**self._build_failures, cap)
+        self._build_failures += 1
+        self._retry_at = clock.monotonic() + delay
+        log.info("Retrying the chart build in %ds", delay)
 
     async def _leg_history(
         self, leg_key: str, from_date: date, today: date, now: datetime
@@ -497,7 +547,8 @@ class Engine:
                 bars = parse_candles(await self.gw.history(leg_key, from_date, yesterday))
                 today_ok, traded = False, False
             past = [b for b in bars if session_date(b[0]) < today]
-            self._past_cache[key] = past
+            if past:  # an empty reply (a glitch, or a contract new today) is asked again next build
+                self._past_cache[key] = past
             return bars, today_ok, traded
         if not today_started:
             return past, True, False
@@ -522,10 +573,10 @@ class Engine:
         before its candles can be fetched, so the window (and with it the
         box size) does not shift when today's data starts arriving. A
         weekday whose candles fetched fine but came back empty after 09:30
-        is treated as a market holiday.
+        is treated as a market holiday - unless the feed has shown trading today.
         """
         seen = {session_date(c[0]) for bars in leg_bars.values() for c in bars}
-        holiday = today_known_empty and now.time() >= time(9, 30)
+        holiday = today_known_empty and now.time() >= time(9, 30) and self._traded_on != today
         if now.weekday() < 5 and now.time() >= time(9, 15) and not holiday:
             seen.add(today)
         return sorted(seen)[-self.days :]
@@ -537,6 +588,8 @@ class Engine:
             full = straddle_series(
                 self.leg_bars.get(chart.ce["key"], []), self.leg_bars.get(chart.pe["key"], [])
             )
+            known = min(self.leg_known.get(k, float("inf")) for k in chart.leg_keys)
+            full = [b for b in full if b[0] <= known]
             chart.history = last_sessions(full, self.window_dates)
             # Live bars outside the window go (e.g. a provisional today found to be a
             # holiday), and so do those now covered by official ones.
@@ -559,11 +612,11 @@ class Engine:
     async def _reconcile_today(self) -> None:
         today = now_ist().date()
         generation = self.generation
-        fresh = {}
+        fresh, known = {}, {}
         for leg_key in [k for c in self.charts for k in c.leg_keys]:
             bars, ok, _ = await self._today_history(leg_key, today)
             if ok:
-                fresh[leg_key] = bars
+                fresh[leg_key], known[leg_key] = bars, settle_cutoff(now_ist())
         if generation != self.generation or not fresh:
             return  # a rebuild happened meanwhile, or nothing new
         changed = False
@@ -576,6 +629,7 @@ class Engine:
             if have and (not bars or bars[-1][0] < have[-1][0]):
                 continue
             self.leg_bars[leg_key] = past + bars
+            self.leg_known[leg_key] = known[leg_key]
             changed = True
         if changed:
             self._recompute_history()
@@ -683,6 +737,12 @@ class Engine:
             # open (a holiday). One from an earlier build (overnight, the 09:15 minute
             # before the 09:16 rollover) still takes the bar: the rebuild carries it over.
             if minute.date() not in self.window_dates and self.built_for == (minute.date(), True):
+                if any(self._minute_volume(c) > 0 for c in self.charts if not c.error):
+                    # Built as a holiday because every candle reply came back empty, yet the
+                    # feed shows trades: no holiday after all. Rebuild with today in the window.
+                    log.warning("Feed shows trading on %s, built as a holiday - rebuilding", minute.date())
+                    self._traded_on = minute.date()
+                    self.built_for = (minute.date(), False)
                 return
             ts = int(minute.timestamp())
             for chart in self.charts:
@@ -733,6 +793,11 @@ class Engine:
                     )
 
                 building = self._build_task and not self._build_task.done()
+                if not building and self._retry_at is not None and clock.monotonic() >= self._retry_at:
+                    log.info("Retrying the failed chart build")
+                    self._retry_at = None
+                    self.rebuild()
+                    continue
                 if (
                     not building
                     and now.weekday() < 5

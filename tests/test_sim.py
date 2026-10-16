@@ -14,6 +14,7 @@ from pnf_sim.replay import (
     build_run,
     candle_path,
     default_dates,
+    latest_session,
     offered_expiries,
     session_candles,
     straddle_rows,
@@ -65,6 +66,17 @@ def test_offers_only_the_next_two_monthlies_without_weeklies():
 
 def test_default_dates_are_the_last_weekday_before_today():
     assert default_dates(TODAY) == (date(2026, 10, 9), date(2026, 10, 9))  # Monday -> Friday
+
+
+def test_default_dates_skip_a_holiday_the_index_did_not_trade_on():
+    # 9 Oct a holiday: the index history's newest session before today is 8 Oct.
+    class HolidayFriday(FakeGateway):
+        async def history(self, neosymbol, start, end):
+            rows = await super().history(neosymbol, start, end)
+            return [r for r in rows if not r[0].startswith("2026-10-09")]
+
+    latest = asyncio.run(latest_session(HolidayFriday(), UNDERLYINGS["NIFTY"], TODAY))
+    assert default_dates(TODAY, latest) == (date(2026, 10, 8), date(2026, 10, 8))
 
 
 def test_session_candles_and_straddle_rows():

@@ -421,6 +421,7 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
   After a partial exit the P&L includes the booked part and the bar shows the lots still open; after a full exit it shows the closed trade's result, plus the total when a chart has been traded more than once.
   Brokerage, taxes and slippage are ignored.
 - Buttons work while paused too, at the price on screen.
+  Paused between minutes, the screen already shows the next minute's opening price (its clock reads that minute's start), so a trade before Play, or at a day's first minute, fills at that day's open, not the previous day's close.
 - Going back along the timeline clears the simulated trades opened (or exited) after the point you go back to, since they have not happened yet; earlier trades and moving forward keep them, and loading a new run starts afresh.
   Signals after that point alert again when they are replayed.
 

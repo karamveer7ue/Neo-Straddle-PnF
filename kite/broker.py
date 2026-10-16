@@ -62,6 +62,7 @@ CONSISTENT_READS = 4  # attempts at positions that include every fill, before an
 BOOK_RETRY_DELAY = 60.0  # seconds before retrying a failed contract load
 LOGIN_STATE_TTL = 15 * 60  # seconds a /kite/login round trip may take
 TOKEN_RESET = time(6, 0)  # Kite expires access tokens around 06:00 IST
+INSTRUMENTS_READY = time(8, 30)  # Kite's day's instrument dump is out by then (new strikes, expiries)
 MARKET_HOURS = (time(9, 0), time(15, 45))
 CLIENT_QUEUE_LIMIT = 500
 
@@ -90,6 +91,7 @@ class KiteBroker:
         self.user: dict | None = None  # {"id", "name"} while logged in
         self.message = ""  # why trading is unavailable (e.g. the session expired)
         self.book: ContractBook | None = None
+        self._book_loaded_at: datetime | None = None  # IST
         self.book_error = ""  # the last failure to load the contract book
         self._book_retry_at = 0.0  # monotonic time before which a failed load is not retried
         self.journal: dict[str, dict] = self._load_journal()  # contract key -> {"contract", "lastTraded"}
@@ -361,12 +363,18 @@ class KiteBroker:
                 pass
 
     async def _ensure_book(self) -> ContractBook:
-        today = now_ist().date()
-        if self.book is None or self.book.loaded_on != today:
+        """The day's contracts: loaded once a day, and once more after 08:30 when the
+        first load came earlier (e.g. just after midnight on yesterday's token), since
+        Kite publishes the day's instrument dump (new strikes and expiries) early morning."""
+        now = now_ist()
+        ready = datetime.combine(now.date(), INSTRUMENTS_READY, IST)
+        loaded = self._book_loaded_at
+        if self.book is None or loaded is None or loaded.date() != now.date() or loaded < ready <= now:
             rows = {}
             for exchange in sorted({kite_exchange(u) for u in UNDERLYINGS.values()}):
                 rows[exchange] = await self.gw.instruments(exchange)
-            self.book = ContractBook(rows, today)
+            self.book = ContractBook(rows, now.date())
+            self._book_loaded_at = now
             log.info("Loaded %d Kite index-option contracts", len(self.book))
         return self.book
 
@@ -499,12 +507,20 @@ class KiteBroker:
             first = await self._place(OrderRequest(ce, SELL, quantity, self.product), key)
             results = [first]
             # The PE follows without waiting for the CE to fill (entries are instant), but
-            # not after Kite refused the CE outright: that would leave a naked PE. A CE
-            # rejected later by Kite's risk checks is reported when its outcome arrives.
+            # not after the CE failed: that could leave a naked PE. A CE rejected later by
+            # Kite's risk checks is reported when its outcome arrives.
             if not first["ok"]:
+                if first.get("orderIds"):
+                    why = "only part of the CE was placed - check the positions."
+                elif first.get("unknown"):
+                    why = "the CE order's outcome is unknown - check the positions."
+                elif first.get("sessionExpired"):
+                    why = "the Kite session expired."
+                else:
+                    why = "the CE order was not placed."
                 results.append(
                     {"kind": "PE", "side": SELL, "quantity": quantity, "tradingsymbol": pe.tradingsymbol,
-                     "ok": False, "held": True, "error": "PE not sent: the CE order was not placed."}
+                     "ok": False, "held": True, "error": f"PE not sent: {why}"}
                 )  # fmt: skip
             else:
                 results.append(await self._place(OrderRequest(pe, SELL, quantity, self.product), key))
@@ -519,7 +535,7 @@ class KiteBroker:
         if not contracts:
             raise KiteError("No position from this app on that straddle.")
         async with self._lock(group):
-            net, orders = await self._consistent_book(contracts)
+            net, orders = await self._consistent_book(contracts, group)
             self.net, self.orders = net, orders
             plan = plan_exit(contracts, net, orders, fraction)
             if not plan:
@@ -541,24 +557,27 @@ class KiteBroker:
         self._after_orders(results)
         return {"group": group, "results": results, "warnings": warnings}
 
-    async def _consistent_book(self, contracts) -> tuple[list[dict], list[dict]]:
+    async def _consistent_book(self, contracts, group: str) -> tuple[list[dict], list[dict]]:
         """Kite's net positions and orders, read so that an exit is never oversized.
 
         Orders are read first: a fill landing between the two reads then shows in
         the positions while its order still counts as working, which can only make
-        the exit smaller. Positions that miss fills the order book already shows
-        are read again.
+        the exit smaller. Positions that miss fills the order book already shows,
+        and an order book that does not list yet an order placed here on this
+        straddle (its quantity would count as not being exited), are read again.
         """
         for _ in range(CONSISTENT_READS):
             orders = await self._fresh(lambda: self.gw.orders(urgent=True))
             positions = await self._fresh(lambda: self.gw.positions(urgent=True))
             orders = orders if isinstance(orders, list) else []
             net = positions.get("net", []) if isinstance(positions, dict) else []
-            if not positions_behind(contracts, net, orders):
+            listed = {str(o.get("order_id")) for o in orders}
+            unlisted = any(w["group"] == group and oid not in listed for oid, w in self._watched.items())
+            if not unlisted and not positions_behind(contracts, net, orders):
                 return net, orders
-            log.info("Kite positions are behind the order book; reading again")
+            log.info("Kite's order book or positions are behind the latest orders; reading again")
             await asyncio.sleep(REREAD_DELAY)
-        raise KiteError("Kite's positions have not caught up with the latest fills - try again in a moment.")
+        raise KiteError("Kite has not caught up with the latest orders and fills - try again in a moment.")
 
     def _after_orders(self, results: list[dict]) -> None:
         if any(r.get("sessionExpired") for r in results):

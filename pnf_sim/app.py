@@ -29,6 +29,7 @@ from .replay import (
     SimRequest,
     build_run,
     default_dates,
+    latest_session,
     offered_expiries,
     today_ist,
     validate_dates,
@@ -76,6 +77,9 @@ async def page():
     return FileResponse(SIM_STATIC / "simulator.html", headers={"Cache-Control": "no-cache"})
 
 
+_latest_sessions: dict[tuple[str, date], date] = {}  # (index, today) -> newest session before today
+
+
 @app.get("/api/options")
 async def options(underlying: UnderlyingKey = DEFAULT_UNDERLYING):
     """What the form can offer: the next listed expiries and the date limits."""
@@ -85,7 +89,15 @@ async def options(underlying: UnderlyingKey = DEFAULT_UNDERLYING):
         expiries = offered_expiries(await app.state.gw.expiries(u), today, u)
     except NeoError as exc:
         raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
-    start, end = default_dates(today)
+    key = (u.key, today)
+    latest = _latest_sessions.get(key)
+    if latest is None:  # one index history request per index and day, while it answers
+        latest = await latest_session(app.state.gw, u, today)
+        for old in [k for k in _latest_sessions if k[1] != today]:
+            del _latest_sessions[old]
+        if latest is not None:
+            _latest_sessions[key] = latest
+    start, end = default_dates(today, latest)
     return {
         "underlying": u.to_json(),
         "underlyings": list(UNDERLYINGS),

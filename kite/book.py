@@ -55,6 +55,21 @@ def is_working(order: dict) -> bool:
     return str(order.get("status", "")).upper() not in TERMINAL
 
 
+def outstanding(order: dict) -> int:
+    """Quantity a working order may still fill.
+
+    Kite's `pending_quantity` is checked against quantity - filled - cancelled,
+    so an order that has not had it filled in yet (one just placed, still in a
+    state like VALIDATION PENDING) counts in full rather than as nothing.
+    """
+    rest = (
+        int(order.get("quantity") or 0)
+        - int(order.get("filled_quantity") or 0)
+        - int(order.get("cancelled_quantity") or 0)
+    )
+    return max(int(order.get("pending_quantity") or 0), rest, 0)
+
+
 def pending_quantity(orders: list[dict], contract: Contract, product: str, side: str) -> int:
     """Quantity still to fill on working orders for this contract, product and side."""
     total = 0
@@ -66,7 +81,7 @@ def pending_quantity(orders: list[dict], contract: Contract, product: str, side:
             and o.get("product") == product
             and o.get("transaction_type") == side
         ):
-            total += int(o.get("pending_quantity") or 0)
+            total += outstanding(o)
     return total
 
 

@@ -337,17 +337,22 @@ function reveal(i, stepping) {
   state.formingKey = '';
   state.formingSpot = null;
   renderClock();
+  // The clock now reads the next minute's start: show its opening price too, so the
+  // screen (and a Sell or Exit made now) is at that moment, not at the last close -
+  // at the run start or a session's first minute, that close is the day before's.
+  showFormingMinute();
 }
 
 /**
  * Play the minute in progress along its price path (open, extremes, close):
  * the charts show it as forming boxes, like live ticks on the live page.
- * Step k of PATH_STEPS is shown once the minute is k / PATH_STEPS done.
+ * Step k of PATH_STEPS is shown once the minute is k / PATH_STEPS done (step 0,
+ * the open, as soon as the minute starts, playing or not).
  */
 function showFormingMinute() {
   const p = state.player;
   const next = p ? p.index + 1 : 0;
-  if (!p || next >= state.minutes.length || !(p.playing || p.progress > 0)) return;
+  if (!p || next >= state.minutes.length) return;
   const steps = state.run.pathSteps;
   const k = Math.min(steps - 1, Math.floor(p.progress * steps));
   const key = `${next}:${k}`;

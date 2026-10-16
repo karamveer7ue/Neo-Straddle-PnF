@@ -96,8 +96,12 @@ export class PnfPanel {
     this.cell = 12; // box width (CSS px)
     this.rowScale = 1; // box height / width, set by dragging the price axis
     this.rowH = 12; // box height (CSS px)
-    this.axisDrag = null; // {startY, startScale, anchorY} while the price axis is dragged
-    this.follow = true;
+    this.axisDrag = null; // {startY, startScale, anchorY, anchorRow} while the price axis is dragged
+    this.follow = true; // keep the newest column in view (horizontally)
+    // ... and its newest box (vertically): off once the user scrolls that box out of view,
+    // so live updates do not snap the view back while they look elsewhere.
+    this.followY = true;
+    this.ownScrollTop = null; // the last scrollTop set here, so its scroll event is not taken for the user's
     this.hover = null; // {x, y} in CSS px within the plot
     this.width = 0;
     this.originX = 0; // blank space left of the first column when all columns fit
@@ -106,7 +110,10 @@ export class PnfPanel {
 
     this.scroller.addEventListener('scroll', () => {
       const maxLeft = this.scroller.scrollWidth - this.scroller.clientWidth;
-      this.follow = this.scroller.scrollLeft >= maxLeft - 2 * this.cell;
+      this.follow = this.originX > 0 || this.scroller.scrollLeft >= maxLeft - 2 * this.cell;
+      // The user scrolling the newest box out of view stops following it vertically;
+      // back into view resumes. Scrolls made here (centring, a stretch) do not count.
+      if (!this.axisDrag && this.scroller.scrollTop !== this.ownScrollTop) this.followY = !this.latestOutOfView();
       this.render();
     });
     this.scroller.addEventListener('mousemove', (e) => {
@@ -123,12 +130,13 @@ export class PnfPanel {
       if (e.button !== 0 || !this.pnf || !this.onAxis({ x: e.clientX - r.left, y })) return;
       e.preventDefault();
       this.scroller.setPointerCapture(e.pointerId);
-      this.axisDrag = { startY: e.clientY, startScale: this.rowScale, anchorY: this.scaleAnchor(y) };
+      // rowH / cell, not rowScale: a scale clamped for another box width would leave a dead zone.
+      this.axisDrag = { startY: e.clientY, startScale: this.rowH / this.cell, ...this.scaleAnchor(y) };
     });
     this.scroller.addEventListener('pointermove', (e) => {
       if (!this.axisDrag) return;
-      const { startY, startScale, anchorY } = this.axisDrag;
-      this.setRowScale(startScale * 2 ** ((startY - e.clientY) / DRAG_DOUBLING_PX), anchorY);
+      const { startY, startScale, anchorY, anchorRow } = this.axisDrag;
+      this.setRowScale(startScale * 2 ** ((startY - e.clientY) / DRAG_DOUBLING_PX), anchorY, anchorRow);
       this.onRowScale?.(this.rowScale);
     });
     const endDrag = () => {
@@ -140,7 +148,8 @@ export class PnfPanel {
       const r = this.el.getBoundingClientRect();
       const y = e.clientY - r.top;
       if (!this.onAxis({ x: e.clientX - r.left, y })) return;
-      this.setRowScale(1, this.scaleAnchor(y));
+      const { anchorY, anchorRow } = this.scaleAnchor(y);
+      this.setRowScale(1, anchorY, anchorRow);
       this.onRowScale?.(1);
     });
     this.scroller.addEventListener('mouseleave', () => {
@@ -149,7 +158,7 @@ export class PnfPanel {
       this.render();
     });
     this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(this.el);
+    this.resizeObserver.observe(this.scroller); // its content box: also changes when scrollbars come or go
     PnfPanel.all.add(this);
   }
 
@@ -167,7 +176,7 @@ export class PnfPanel {
 
   setSeries(series) {
     this.series = series;
-    this.follow = true;
+    this.follow = this.followY = true;
     this.recompute({ recenter: true });
   }
 
@@ -204,46 +213,64 @@ export class PnfPanel {
   setCell(cellOverride) {
     this.cellOverride = cellOverride;
     if (cellOverride === null) this.rowScale = 1; // Fit: square boxes, sized to the panel height
-    this.follow = true;
-    this.layout({ recenter: true });
+    this.followLatest();
   }
 
   /** Back to the newest column (and its price), e.g. after the panel changed size. */
   followLatest() {
-    this.follow = true;
+    this.follow = this.followY = true;
     this.layout({ recenter: true });
   }
 
   /**
-   * Box height as a multiple of the width, keeping the price at plot y `anchorY`
-   * where it is; columns keep their width.
+   * Box height as a multiple of the width, with row `anchorRow` (fractional) kept
+   * at plot y `anchorY`; columns keep their width.
    */
-  setRowScale(scale, anchorY) {
-    if (!this.width) {
-      this.rowScale = scale; // not laid out yet: the first resize applies it
+  setRowScale(scale, anchorY, anchorRow) {
+    if (!this.width || !this.pnf) {
+      this.rowScale = scale; // not laid out yet: the first layout applies it
       return;
     }
-    const fromTop = (this.scroller.scrollTop + anchorY - HEADER) / this.rowH; // rows above the anchor
     const rowH = Math.min(ROW_MAX, Math.max(ROW_MIN, this.cell * scale));
     this.rowScale = rowH / this.cell;
     this.layout({ keepTop: true });
-    this.scroller.scrollTop = fromTop * this.rowH - (anchorY - HEADER);
+    this.setScrollTop(HEADER + (this.topRow - anchorRow) * this.rowH + this.rowH / 2 - anchorY);
     this.render();
+  }
+
+  setScrollTop(top) {
+    this.scroller.scrollTop = top;
+    this.ownScrollTop = this.scroller.scrollTop; // as clamped
   }
 
   /** Take the box height another panel's axis drag set (around the current price while following). */
   matchRowScale(scale) {
-    if (scale !== this.rowScale) this.setRowScale(scale, this.scaleAnchor(this.height / 2));
+    if (scale === this.rowScale) return;
+    const { anchorY, anchorRow } = this.scaleAnchor(this.height / 2);
+    this.setRowScale(scale, anchorY, anchorRow);
   }
 
   /**
-   * The plot y that stays put while the box height changes: the current price
-   * while following the newest column (so it stays in view), else `y`.
+   * What stays put while the box height changes: the current price while
+   * following the newest column (so it stays in view), else the price at plot y `y`.
+   * A row, not a screen y: the scroll may be clamped, or a tick move the view, mid-drag.
    */
   scaleAnchor(y) {
+    if (!this.pnf) return { anchorY: y, anchorRow: 0 };
     const current = this.live?.price ?? this.series[this.series.length - 1]?.[1];
-    if (!this.follow || current === undefined) return y;
-    return Math.min(this.height, Math.max(HEADER, this.priceY(current)));
+    if (this.follow && this.followY && current !== undefined) {
+      return { anchorY: Math.min(this.height, Math.max(HEADER, this.priceY(current))), anchorRow: this.pnf.rowOf(current) };
+    }
+    return { anchorY: y, anchorRow: this.topRow - (this.scroller.scrollTop + y - HEADER - this.rowH / 2) / this.rowH };
+  }
+
+  /** Whether the newest box sits outside the band the view keeps it in. */
+  latestOutOfView() {
+    const pnf = this.pnf;
+    if (!pnf?.columns.length) return false;
+    const lastCol = pnf.columns[pnf.columns.length - 1];
+    const y = this.rowY(lastCol.dir === 'X' ? lastCol.hi : lastCol.lo);
+    return y < HEADER + 2 * this.rowH || y > this.height - 3 * this.rowH;
   }
 
   /** Whether a plot point (CSS px) is on the price axis, below the date strip. */
@@ -279,14 +306,20 @@ export class PnfPanel {
 
   resize() {
     const dpr = window.devicePixelRatio || 1;
-    this.width = this.el.clientWidth;
-    this.height = this.el.clientHeight;
+    // The scroller's client box: classic (always shown) scrollbars take their room from it.
+    this.width = this.scroller.clientWidth;
+    this.height = this.scroller.clientHeight;
     this.canvas.width = Math.round(this.width * dpr);
     this.canvas.height = Math.round(this.height * dpr);
     this.canvas.style.width = `${this.width}px`;
     this.canvas.style.height = `${this.height}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.layout({ recenter: true });
+    // Setting the canvas size cleared it: draw now, not on the next frame, or every
+    // resize (an expand, a window drag) shows an empty plot for a frame.
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    this.draw();
   }
 
   get topRow() {
@@ -318,9 +351,10 @@ export class PnfPanel {
       this.scroller.scrollLeft = this.scroller.scrollWidth - this.scroller.clientWidth;
       const lastCol = pnf.columns[pnf.columns.length - 1];
       const lastRow = lastCol.dir === 'X' ? lastCol.hi : lastCol.lo;
-      const y = HEADER + (this.topRow - lastRow) * rh - this.scroller.scrollTop;
-      if (!keepTop && (recenter || y < HEADER + 2 * rh || y > this.height - 3 * rh)) {
-        this.scroller.scrollTop = HEADER + (this.topRow - lastRow) * rh - (this.height + HEADER) / 2;
+      const centre = !keepTop && !this.axisDrag && (recenter || (this.followY && this.latestOutOfView()));
+      if (centre) {
+        this.setScrollTop(HEADER + (this.topRow - lastRow) * rh - (this.height + HEADER) / 2);
+        this.followY = true;
       }
     }
     this.render();

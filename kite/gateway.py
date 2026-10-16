@@ -201,11 +201,15 @@ class KiteGateway:
 def parse_slices(reply) -> list[dict]:
     """Normalise an order reply: a list with one {"order_id"} or {"error"} per order.
 
-    Kite returns a list for an autoslice order; the SDK's place_order returns
-    the bare order ID (a {"order_id"} dict is accepted too).
+    Kite's API documents a list for an autoslice order, one entry per slice; the
+    SDK's docstring describes {"order_id": <parent>, "children": [...]}, so the
+    children of such a reply are taken as the slices. place_order returns the
+    bare order ID (a {"order_id"} dict is accepted too).
     """
     if isinstance(reply, (str, int)) and str(reply):
         reply = {"order_id": reply}
+    if isinstance(reply, dict) and isinstance(reply.get("children"), list):
+        reply = reply["children"]  # the parent is not an order of its own in the book
     items = reply if isinstance(reply, list) else [reply]
     slices = []
     for item in items:

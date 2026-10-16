@@ -47,6 +47,10 @@ class FakeGateway:
         self.history_calls = []
         self.expiry_calls = []
         self.subscriptions = []  # what the fake feed was asked for
+        self.today_fails_for: set[str] = set()  # legs whose same-day candles are refused
+        self.fails_for: set[str] = set()  # legs whose every history request fails
+        self.empty_for: set[str] = set()  # legs whose history comes back empty
+        self.future_quote = {"ltp": 22612.6, "open": 22600.0, "prev_close": 22535.2}
 
     async def expiries(self, u):
         self.expiry_calls.append(u.key)
@@ -70,7 +74,7 @@ class FakeGateway:
         }
 
     async def quote(self, segment, token, what):
-        return {"ltp": 22612.6, "open": 22600.0, "prev_close": 22535.2}
+        return dict(self.future_quote)
 
     async def option_contracts(self, u, expiry, strikes):
         return {(s, k): leg(u.fo_segment, s, k) for s in strikes for k in ("CE", "PE")}
@@ -80,8 +84,12 @@ class FakeGateway:
 
     async def history(self, neosymbol, from_date, to_date):
         self.history_calls.append((neosymbol, from_date, to_date))
-        if self.today_fails and to_date >= TODAY:
+        if neosymbol in self.fails_for:
+            raise NeoError("Some error occurred while fetching data")
+        if (self.today_fails or neosymbol in self.today_fails_for) and to_date >= TODAY:
             raise NeoError("same-day candles unavailable")
+        if neosymbol in self.empty_for:
+            return []
         base = 100.0 if neosymbol.endswith("CE") else 50.0
         rows = []
         for day in [*PAST_DAYS, TODAY]:
@@ -591,6 +599,83 @@ def test_a_holiday_takes_no_live_bars_once_decided(clock, make_engine):
     assert eng.charts[1].series() == before
 
 
+def test_a_day_built_as_a_holiday_is_rebuilt_once_the_feed_shows_trading(clock, make_engine):
+    clock["t"] = datetime(2026, 10, 12, 11, 0, 5, tzinfo=IST)
+    eng = make_engine(today_minutes=0)  # every leg's candles for today come back empty
+    asyncio.run(eng._build())
+    assert eng.built_for == (TODAY, True) and TODAY not in eng.window_dates
+    eng.feed_state = "live"
+    eng._on_feed(tick("22300CE", 118.0, volume=50_000))
+    eng._on_feed(tick("22300PE", 62.0, volume=40_000))
+    eng._close_minute(datetime(2026, 10, 12, 10, 59, tzinfo=IST))
+    assert eng.built_for == (TODAY, True)  # no trades seen yet: still a holiday
+    eng._on_feed(tick("22300CE", 118.5, volume=50_300))  # the market is trading after all
+    eng._close_minute(datetime(2026, 10, 12, 11, 0, tzinfo=IST))
+    assert eng.built_for == (TODAY, False)  # the clock loop rebuilds
+    asyncio.run(eng._build())
+    assert TODAY in eng.window_dates
+
+
+def test_a_leg_whose_today_failed_is_never_paired_with_a_stale_price(clock, make_engine):
+    eng = make_engine()
+    eng.gw.today_fails_for = {"nse_fo|22300PE"}
+    asyncio.run(eng._build())
+    atm = eng.charts[1]
+    # The CE has today, the PE only up to Friday: the ATM chart stops at Friday's close
+    # rather than pairing today's CE with Friday's PE.
+    assert atm.series()[-1][0] == ist_ts(15, 29, date(2026, 10, 9))
+    assert eng.charts[0].series()[-1][0] == ist_ts(9, 58)  # the other charts have today
+    eng.feed_state = "live"
+    eng._on_feed(tick("22300CE", 118.0, volume=50_000))
+    eng._on_feed(tick("22300PE", 62.0, volume=40_000))
+    eng._close_minute(datetime(2026, 10, 12, 10, 0, tzinfo=IST))
+    assert atm.series()[-1] == (ist_ts(10, 0), 180.0, 0)
+    asyncio.run(eng._reconcile())  # the PE still fails: its live bar stays, nothing stale comes in
+    assert atm.series()[-1] == (ist_ts(10, 0), 180.0, 0)
+    assert all(b[0] <= ist_ts(15, 29, date(2026, 10, 9)) for b in atm.history)
+    eng.gw.today_fails_for = set()
+    asyncio.run(eng._reconcile())
+    assert atm.history[-1][0] == ist_ts(9, 58)  # both legs known again
+
+
+def test_a_leg_whose_history_fails_costs_only_its_chart_and_is_retried(clock, make_engine):
+    clock["t"] = datetime(2026, 10, 12, 8, 0, tzinfo=IST)  # before the open: no past-only fallback
+    eng = make_engine()
+    eng.gw.fails_for = {"nse_fo|22500CE"}
+    asyncio.run(eng._build())
+    assert eng.phase == "ready"
+    assert [bool(c.error) for c in eng.charts] == [False, False, True]
+    assert eng.charts[2].load_failed and eng._retry_at is not None
+    eng.gw.fails_for = set()
+    asyncio.run(eng._build())
+    assert not any(c.error for c in eng.charts) and eng._retry_at is None
+    # When every chart fails, the build fails, and is retried later still.
+    eng.gw.fails_for = {"nse_fo|22100CE", "nse_fo|22300PE", "nse_fo|22500CE"}
+    eng._past_cache.clear()  # nothing cached to fall back on
+    asyncio.run(eng._build())
+    assert eng.phase == "error" and eng._retry_at is not None
+
+
+def test_an_empty_history_reply_is_not_cached(clock, make_engine):
+    eng = make_engine()
+    eng.gw.empty_for = {"nse_fo|22300PE"}
+    asyncio.run(eng._build())
+    assert not eng.charts[1].series()
+    eng.gw.empty_for = set()
+    asyncio.run(eng._build())
+    assert eng.charts[1].series()[0][0] == ist_ts(9, 15, date(2026, 10, 8))
+
+
+def test_the_futures_previous_close_follows_a_rebuild_with_the_feed_live(clock, make_engine):
+    eng = make_engine()
+    asyncio.run(eng._build())
+    eng.feed_state = "live"
+    eng.future_ltp = 22650.0  # from the feed
+    eng.gw.future_quote = {"ltp": 22700.0, "open": 22690.0, "prev_close": 22640.0}  # the next day
+    asyncio.run(eng._build())
+    assert (eng.future_ltp, eng.future_prev_close) == (22650.0, 22640.0)
+
+
 def test_a_refresh_with_less_of_today_never_erases_official_bars(clock, make_engine):
     eng = make_engine()
     asyncio.run(eng._build())
@@ -764,3 +849,33 @@ def test_config_endpoint_switches_index_keeping_its_expiry(make_engine):
     assert refused.status_code == 422 and "no weekly expiry" in refused.json()["detail"]
     assert http.post("/api/config", json={"underlying": "FINNIFTY", "days": 3}).status_code == 422
     assert eng.underlying_key == "NIFTY"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"stat": "Not_Ok", "errMsg": "Invalid neosymbol"},
+        {"error": [{"message": "Bad request"}]},
+        {"errMsg": "Something went wrong"},
+        {"Error": "Unexpected response format", "StatusCode": 200},
+        {"status": "error", "message": "down"},
+    ],
+)
+def test_history_errors_never_pass_for_an_empty_day(monkeypatch, reply):
+    from pnf import neo as neo_mod
+
+    monkeypatch.setattr(neo_mod, "MIN_CALL_GAP", 0)
+    gw = neo_mod.NeoGateway("key", "", "", "")
+    monkeypatch.setattr(gw.client, "historical_data", lambda **kwargs: reply)
+    with pytest.raises(NeoError):
+        asyncio.run(gw.history("nse_fo|1", TODAY, TODAY))
+    monkeypatch.setattr(
+        gw.client, "historical_data", lambda **kwargs: {"status": "success", "data": {"candles": []}}
+    )
+    assert asyncio.run(gw.history("nse_fo|1", TODAY, TODAY)) == []
+    partial = {
+        "status": "Partial response",
+        "data": {"candles": [["2026-10-12T09:15:00+0530", 1, 1, 1, 1, 5]]},
+    }
+    monkeypatch.setattr(gw.client, "historical_data", lambda **kwargs: partial)
+    assert len(asyncio.run(gw.history("nse_fo|1", TODAY, TODAY))) == 1

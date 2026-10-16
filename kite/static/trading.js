@@ -61,14 +61,26 @@ function storeQty(underlying, qty) {
 
 // ---------------- Server ----------------
 
+/**
+ * POST as JSON. A 4xx reply is the server refusing before any order went out
+ * (`err.refused`); a network failure or a 5xx may come after orders were placed.
+ */
 async function post(url, body) {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join('; ') : data.detail;
-    throw new Error(detail || `${res.status} ${res.statusText}`);
+    const err = new Error(detail || `${res.status} ${res.statusText}`);
+    err.refused = res.status >= 400 && res.status < 500;
+    throw err;
   }
   return data;
+}
+
+/** Toast for an order request that failed: refused (nothing placed) or outcome unknown. */
+function orderFailedToast(action, err, group) {
+  if (err.refused) errorToast(`${action} not placed`, err.message, { group });
+  else errorToast(`${action}: outcome unknown`, `${err.message} - check the positions before retrying`, { group });
 }
 
 let retryDelay = 500;
@@ -188,7 +200,7 @@ async function sell(target, input) {
     storeQty(target.underlying, qty);
     reportPlacement('sell', res);
   } catch (err) {
-    errorToast('Sell not placed', err.message, { group: target.key });
+    orderFailedToast('Sell', err, target.key);
   } finally {
     k.busy.delete(target.key);
     render();
@@ -201,7 +213,7 @@ async function exit(key, fraction) {
   try {
     reportPlacement('buy', await post('/api/kite/exit', { group: key, fraction }));
   } catch (err) {
-    errorToast(fraction < 1 ? 'Exit 50% not placed' : 'Exit not placed', err.message, { group: key });
+    orderFailedToast(fraction < 1 ? 'Exit 50%' : 'Exit', err, key);
   } finally {
     k.busy.delete(key);
     render();
