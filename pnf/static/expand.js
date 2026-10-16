@@ -9,12 +9,15 @@ const ICON_RESTORE = 'M20 10h-6V4M4 14h6v6M14 10l6.5-6.5M10 14l-6.5 6.5';
 
 let current = null; // panel root of the expanded chart
 let wanted = null; // key of the chart to expand, kept while the charts are rebuilt
+const onToggles = new WeakMap(); // panel root -> called after it expands or restores
 
 /**
  * Give a chart panel its expand button. `key` names the chart's place (e.g. its
  * ATM offset): a rebuilt panel with the same key comes back expanded.
+ * `onToggle` runs each time the panel expands or restores (e.g. to show the newest column).
  */
-export function mountExpand(root, key) {
+export function mountExpand(root, key, onToggle) {
+  onToggles.set(root, onToggle);
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'ph-expand';
@@ -36,14 +39,17 @@ function expand(root, key) {
   current = root;
   wanted = key;
   sync(root, true);
+  onToggles.get(root)?.();
 }
 
 function restore() {
   wanted = null;
   if (!current) return;
-  current.classList.remove('expanded');
-  sync(current, false);
+  const root = current;
   current = null;
+  root.classList.remove('expanded');
+  sync(root, false);
+  if (root.isConnected) onToggles.get(root)?.(); // a rebuild may have replaced it already
 }
 
 function sync(root, expanded) {

@@ -15,6 +15,10 @@ const PAD_ROWS = 6;
 export const CELL_STEPS = [6, 8, 10, 12, 14, 16, 20, 24];
 const AUTO_CELL_MIN = 8;
 const AUTO_CELL_MAX = 18;
+// Box height can be stretched or squeezed apart from the width by dragging the price axis.
+const ROW_MIN = 2;
+const ROW_MAX = 64;
+const DRAG_DOUBLING_PX = 120; // dragging this far up doubles the box height (down halves it)
 const LABEL_STEPS = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000];
 
 const IST = 'Asia/Kolkata';
@@ -72,13 +76,15 @@ watchPixelRatio();
 export class PnfPanel {
   static all = new Set();
 
-  constructor(plotEl, { onHover } = {}) {
+  /** `onRowScale(scale)` is told when a drag or double-click on the price axis sets the box height. */
+  constructor(plotEl, { onHover, onRowScale } = {}) {
     this.el = plotEl;
     this.canvas = plotEl.querySelector('canvas');
     this.ctx = this.canvas.getContext('2d');
     this.scroller = plotEl.querySelector('.scroller');
     this.spacer = plotEl.querySelector('.spacer');
     this.onHover = onHover;
+    this.onRowScale = onRowScale;
 
     this.series = [];
     this.live = null; // {ts, price} of the forming minute
@@ -87,7 +93,10 @@ export class PnfPanel {
     this.dayMarks = [];
     this.cellOverride = null;
     this.overlays = { vwap: true, vwma: true };
-    this.cell = 12;
+    this.cell = 12; // box width (CSS px)
+    this.rowScale = 1; // box height / width, set by dragging the price axis
+    this.rowH = 12; // box height (CSS px)
+    this.axisDrag = null; // {startY, startScale, anchorY} while the price axis is dragged
     this.follow = true;
     this.hover = null; // {x, y} in CSS px within the plot
     this.width = 0;
@@ -103,7 +112,36 @@ export class PnfPanel {
     this.scroller.addEventListener('mousemove', (e) => {
       const r = this.el.getBoundingClientRect();
       this.hover = { x: e.clientX - r.left, y: e.clientY - r.top, clientX: e.clientX, clientY: e.clientY };
+      this.scroller.style.cursor = this.axisDrag || this.onAxis(this.hover) ? 'ns-resize' : '';
       this.render();
+    });
+    // Drag the price axis up to stretch the boxes vertically, down to squeeze them;
+    // a double-click there goes back to square boxes.
+    this.scroller.addEventListener('pointerdown', (e) => {
+      const r = this.el.getBoundingClientRect();
+      const y = e.clientY - r.top;
+      if (e.button !== 0 || !this.pnf || !this.onAxis({ x: e.clientX - r.left, y })) return;
+      e.preventDefault();
+      this.scroller.setPointerCapture(e.pointerId);
+      this.axisDrag = { startY: e.clientY, startScale: this.rowScale, anchorY: this.scaleAnchor(y) };
+    });
+    this.scroller.addEventListener('pointermove', (e) => {
+      if (!this.axisDrag) return;
+      const { startY, startScale, anchorY } = this.axisDrag;
+      this.setRowScale(startScale * 2 ** ((startY - e.clientY) / DRAG_DOUBLING_PX), anchorY);
+      this.onRowScale?.(this.rowScale);
+    });
+    const endDrag = () => {
+      this.axisDrag = null;
+    };
+    this.scroller.addEventListener('pointerup', endDrag);
+    this.scroller.addEventListener('pointercancel', endDrag);
+    this.scroller.addEventListener('dblclick', (e) => {
+      const r = this.el.getBoundingClientRect();
+      const y = e.clientY - r.top;
+      if (!this.onAxis({ x: e.clientX - r.left, y })) return;
+      this.setRowScale(1, this.scaleAnchor(y));
+      this.onRowScale?.(1);
     });
     this.scroller.addEventListener('mouseleave', () => {
       this.hover = null;
@@ -165,8 +203,52 @@ export class PnfPanel {
 
   setCell(cellOverride) {
     this.cellOverride = cellOverride;
+    if (cellOverride === null) this.rowScale = 1; // Fit: square boxes, sized to the panel height
     this.follow = true;
     this.layout({ recenter: true });
+  }
+
+  /** Back to the newest column (and its price), e.g. after the panel changed size. */
+  followLatest() {
+    this.follow = true;
+    this.layout({ recenter: true });
+  }
+
+  /**
+   * Box height as a multiple of the width, keeping the price at plot y `anchorY`
+   * where it is; columns keep their width.
+   */
+  setRowScale(scale, anchorY) {
+    if (!this.width) {
+      this.rowScale = scale; // not laid out yet: the first resize applies it
+      return;
+    }
+    const fromTop = (this.scroller.scrollTop + anchorY - HEADER) / this.rowH; // rows above the anchor
+    const rowH = Math.min(ROW_MAX, Math.max(ROW_MIN, this.cell * scale));
+    this.rowScale = rowH / this.cell;
+    this.layout({ keepTop: true });
+    this.scroller.scrollTop = fromTop * this.rowH - (anchorY - HEADER);
+    this.render();
+  }
+
+  /** Take the box height another panel's axis drag set (around the current price while following). */
+  matchRowScale(scale) {
+    if (scale !== this.rowScale) this.setRowScale(scale, this.scaleAnchor(this.height / 2));
+  }
+
+  /**
+   * The plot y that stays put while the box height changes: the current price
+   * while following the newest column (so it stays in view), else `y`.
+   */
+  scaleAnchor(y) {
+    const current = this.live?.price ?? this.series[this.series.length - 1]?.[1];
+    if (!this.follow || current === undefined) return y;
+    return Math.min(this.height, Math.max(HEADER, this.priceY(current)));
+  }
+
+  /** Whether a plot point (CSS px) is on the price axis, below the date strip. */
+  onAxis(p) {
+    return p.x >= this.width - AXIS && p.y >= HEADER;
   }
 
   recompute({ recenter = false } = {}) {
@@ -211,7 +293,7 @@ export class PnfPanel {
     return (this.pnf?.hi ?? 0) + PAD_ROWS;
   }
 
-  layout({ recenter = false } = {}) {
+  layout({ recenter = false, keepTop = false } = {}) {
     if (!this.width) return;
     const pnf = this.pnf;
     const rows = pnf ? pnf.hi - pnf.lo + 1 + 2 * PAD_ROWS : 1;
@@ -223,18 +305,22 @@ export class PnfPanel {
       this.cell = Math.max(AUTO_CELL_MIN, Math.min(AUTO_CELL_MAX, fit));
     }
     const c = this.cell;
+    this.rowH = Math.min(ROW_MAX, Math.max(ROW_MIN, c * this.rowScale));
+    const rh = this.rowH;
     this.spacer.style.width = `${cols * c + AXIS}px`;
-    this.spacer.style.height = `${rows * c + HEADER}px`;
+    this.spacer.style.height = `${rows * rh + HEADER}px`;
     // Columns that fit without scrolling sit against the price axis, as they do once they scroll.
     this.originX = Math.max(0, Math.floor(this.width - AXIS - cols * c));
+    // With nothing to scroll back to, the newest column is in view: keep following it.
+    if (this.originX > 0) this.follow = true;
 
     if (this.follow && pnf?.columns.length) {
       this.scroller.scrollLeft = this.scroller.scrollWidth - this.scroller.clientWidth;
       const lastCol = pnf.columns[pnf.columns.length - 1];
       const lastRow = lastCol.dir === 'X' ? lastCol.hi : lastCol.lo;
-      const y = HEADER + (this.topRow - lastRow) * c - this.scroller.scrollTop;
-      if (recenter || y < HEADER + 2 * c || y > this.height - 3 * c) {
-        this.scroller.scrollTop = HEADER + (this.topRow - lastRow) * c - (this.height + HEADER) / 2;
+      const y = HEADER + (this.topRow - lastRow) * rh - this.scroller.scrollTop;
+      if (!keepTop && (recenter || y < HEADER + 2 * rh || y > this.height - 3 * rh)) {
+        this.scroller.scrollTop = HEADER + (this.topRow - lastRow) * rh - (this.height + HEADER) / 2;
       }
     }
     this.render();
@@ -259,7 +345,7 @@ export class PnfPanel {
   }
 
   rowY(row) {
-    return HEADER + (this.topRow - row) * this.cell - this.scroller.scrollTop;
+    return HEADER + (this.topRow - row) * this.rowH - this.scroller.scrollTop;
   }
 
   // ---------------- Drawing ----------------
@@ -275,16 +361,16 @@ export class PnfPanel {
   draw() {
     theme ??= readTheme();
     const t = theme;
-    const { ctx, width: W, height: H, cell: c, pnf } = this;
+    const { ctx, width: W, height: H, cell: c, rowH: rh, pnf } = this;
     const chartW = W - AXIS;
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = t.bg;
     ctx.fillRect(0, 0, W, H);
     if (!pnf) return;
 
-    const labelStep = LABEL_STEPS.find((s) => s * c >= 22) ?? LABEL_STEPS[LABEL_STEPS.length - 1];
-    const firstRow = Math.floor(this.topRow - (H - HEADER + this.scroller.scrollTop) / c) - 1;
-    const lastRow = Math.ceil(this.topRow - (this.scroller.scrollTop - c) / c) + 1;
+    const labelStep = LABEL_STEPS.find((s) => s * rh >= 22) ?? LABEL_STEPS[LABEL_STEPS.length - 1];
+    const firstRow = Math.floor(this.topRow - (H - HEADER + this.scroller.scrollTop) / rh) - 1;
+    const lastRow = Math.ceil(this.topRow - (this.scroller.scrollTop - rh) / rh) + 1;
     const firstCol = Math.max(0, Math.floor(this.viewLeft / c) - PAD_COLS_LEFT - 1);
     const lastCol = Math.min(pnf.columns.length - 1, Math.ceil((this.viewLeft + chartW) / c));
 
@@ -304,8 +390,8 @@ export class PnfPanel {
     ctx.lineWidth = 1;
     for (let row = firstRow; row <= lastRow; row++) {
       const major = row % labelStep === 0;
-      if (!major && c < 10) continue;
-      const y = Math.round(this.rowY(row) + c / 2) + 0.5;
+      if (!major && rh < 10) continue;
+      const y = Math.round(this.rowY(row) + rh / 2) + 0.5;
       ctx.strokeStyle = major ? t.gridMajor : t.grid;
       ctx.beginPath();
       ctx.moveTo(0, y);
@@ -342,20 +428,20 @@ export class PnfPanel {
     const hit = this.hitTest();
     if (hit) {
       ctx.fillStyle = t.hover;
-      ctx.fillRect(this.colX(hit.col), this.rowY(hit.row), c, c);
+      ctx.fillRect(this.colX(hit.col), this.rowY(hit.row), c, rh);
     }
 
     // Double top buy / double bottom sell: a solid bar over the previous two
     // columns, sitting just beyond the level the signal broke - green above
     // the old top for a buy, red below the old bottom for a sell. It lives in
     // the row next to that level, which is empty in both columns.
-    const barH = Math.max(3, Math.round(c * 0.3));
-    const gap = Math.max(1, Math.round(c * 0.12));
+    const barH = Math.max(2, Math.min(Math.round(c * 0.3), Math.round(rh * 0.3)));
+    const gap = Math.max(1, Math.round(Math.min(c, rh) * 0.12));
     for (const s of pnf.signals) {
       if (s.col - 1 < firstCol || s.col - 2 > lastCol) continue;
       const x0 = this.colX(s.col - 2) + 1;
       const x1 = this.colX(s.col) - 1;
-      const y = s.type === 'buy' ? this.rowY(s.level) - gap - barH : this.rowY(s.level) + c + gap;
+      const y = s.type === 'buy' ? this.rowY(s.level) - gap - barH : this.rowY(s.level) + rh + gap;
       ctx.globalAlpha = s.ts > this.lastCommittedTs ? 0.45 : 1; // forming: faded
       ctx.fillStyle = s.type === 'buy' ? t.x : t.o;
       ctx.beginPath();
@@ -365,8 +451,9 @@ export class PnfPanel {
     ctx.globalAlpha = 1;
 
     // X and O boxes
-    const inset = Math.max(1.5, c * 0.2);
-    ctx.lineWidth = Math.max(1.25, Math.min(2.25, c / 7));
+    const insetX = Math.max(1.5, c * 0.2);
+    const insetY = Math.min(Math.max(1.5, rh * 0.2), rh / 2 - 0.5);
+    ctx.lineWidth = Math.max(1, Math.min(2.25, Math.min(c, rh) / 7));
     ctx.lineCap = 'round';
     for (let i = firstCol; i <= lastCol; i++) {
       const col = pnf.columns[i];
@@ -378,12 +465,14 @@ export class PnfPanel {
         ctx.globalAlpha = b.ts > this.lastCommittedTs ? 0.4 : 1;
         ctx.beginPath();
         if (col.dir === 'X') {
-          ctx.moveTo(x + inset, y + inset);
-          ctx.lineTo(x + c - inset, y + c - inset);
-          ctx.moveTo(x + c - inset, y + inset);
-          ctx.lineTo(x + inset, y + c - inset);
+          ctx.moveTo(x + insetX, y + insetY);
+          ctx.lineTo(x + c - insetX, y + rh - insetY);
+          ctx.moveTo(x + c - insetX, y + insetY);
+          ctx.lineTo(x + insetX, y + rh - insetY);
         } else {
-          ctx.arc(x + c / 2, y + c / 2, c / 2 - inset * 0.85, 0, Math.PI * 2);
+          const rx = c / 2 - insetX * 0.85;
+          const ry = Math.max(0.5, rh / 2 - insetY * 0.85);
+          ctx.ellipse(x + c / 2, y + rh / 2, rx, ry, 0, 0, Math.PI * 2);
         }
         ctx.stroke();
       }
@@ -466,7 +555,7 @@ export class PnfPanel {
   }
 
   priceY(price) {
-    return HEADER + (this.topRow - this.pnf.rowOf(price)) * this.cell - this.scroller.scrollTop + this.cell / 2;
+    return HEADER + (this.topRow - this.pnf.rowOf(price)) * this.rowH - this.scroller.scrollTop + this.rowH / 2;
   }
 
   drawDateStrip(chartW) {
@@ -507,7 +596,7 @@ export class PnfPanel {
   }
 
   drawAxis(chartW, firstRow, lastRow, labelStep, tags, hit) {
-    const { ctx, height: H, cell: c, pnf } = this;
+    const { ctx, height: H, rowH: rh, pnf } = this;
     const t = theme;
     ctx.fillStyle = t.stripBg;
     ctx.fillRect(chartW, 0, AXIS, H);
@@ -524,12 +613,12 @@ export class PnfPanel {
 
     const placed = placeTags(tags, HEADER + TAG_H / 2, H - TAG_H / 2);
     // The hovered-row readout is dropped where it would cover a tag.
-    let hoverY = hit ? this.rowY(hit.row) + c / 2 : null;
+    let hoverY = hit ? this.rowY(hit.row) + rh / 2 : null;
     if (hoverY !== null && placed.some((p) => Math.abs(hoverY - p.y) < TAG_H)) hoverY = null;
     // Tags hide the regular labels they would overlap.
     const covered = (y) => [...placed.map((p) => p.y), hoverY].some((ty) => ty !== null && Math.abs(ty - y) < 16);
     for (let row = Math.ceil(firstRow / labelStep) * labelStep; row <= lastRow; row += labelStep) {
-      const y = this.rowY(row) + c / 2;
+      const y = this.rowY(row) + rh / 2;
       if (y < HEADER + 7 || y > H - 7) continue; // would be cut in half by the edges
       ctx.fillRect(chartW, Math.round(y), 4, 1);
       if (!covered(y)) ctx.fillText(fmtPrice(pnf.price(row)), chartW + 8, y);
@@ -555,9 +644,8 @@ export class PnfPanel {
   hitTest() {
     const h = this.hover;
     if (!h || !this.pnf || h.x >= this.width - AXIS || h.y < HEADER) return null;
-    const c = this.cell;
-    const col = Math.floor((h.x + this.viewLeft) / c) - PAD_COLS_LEFT;
-    const row = this.topRow - Math.floor((h.y - HEADER + this.scroller.scrollTop) / c);
+    const col = Math.floor((h.x + this.viewLeft) / this.cell) - PAD_COLS_LEFT;
+    const row = this.topRow - Math.floor((h.y - HEADER + this.scroller.scrollTop) / this.rowH);
     const column = this.pnf.columns[col];
     const box = column?.boxes.find((b) => b.row === row) ?? null;
     return { col, row, box, column };

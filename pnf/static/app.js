@@ -61,6 +61,7 @@ const state = {
   live: null,
   panels: new Map(), // key -> {root, panel, def}
   cellOverride: null,
+  rowScale: 1, // box height / width on every chart, set by dragging a price axis
   wantLogin: false,
   loginError: '',
   atmDirty: false,
@@ -109,10 +110,11 @@ function buildPanels(charts) {
     const root = els.template.content.firstElementChild.cloneNode(true);
     root.classList.toggle('atm', def.offset === 0);
     els.charts.append(root);
-    mountExpand(root, def.offset);
-    const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip });
+    const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip, onRowScale: setRowScale });
     panel.setCell(state.cellOverride);
+    panel.matchRowScale(state.rowScale);
     panel.setOverlays(state.overlays);
+    mountExpand(root, def.offset, () => panel.followLatest());
     state.panels.set(def.key, { root, panel, def });
   }
 }
@@ -726,8 +728,15 @@ els.sound.addEventListener('click', () => {
 });
 renderSound();
 
+/** A price-axis drag on one chart stretches or squeezes the boxes of all of them. */
+function setRowScale(scale) {
+  state.rowScale = scale;
+  for (const { panel } of state.panels.values()) panel.matchRowScale(scale);
+}
+
 function setZoom(cellOverride) {
   state.cellOverride = cellOverride;
+  if (cellOverride === null) state.rowScale = 1; // Fit makes the boxes square again (PnfPanel.setCell)
   for (const { panel } of state.panels.values()) panel.setCell(cellOverride);
   renderTopbar();
 }

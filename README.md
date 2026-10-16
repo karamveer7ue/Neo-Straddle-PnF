@@ -258,7 +258,7 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | **Auto** | Goes back to the ATM from today's index open. Hover it to see the open and the strike it gives. |
 | **View** | Opens a menu with the chart settings below; Esc or a click elsewhere closes it. |
 | **View > VWAP / VWMA 10** | Show or hide each overlay on all three charts; VWAP is on and VWMA 10 off until you change them (remembered by the browser). |
-| **View > Box size** | **-** smaller boxes, **Fit** fits the boxes to the panel height, **+** bigger boxes. |
+| **View > Box size** | **-** smaller boxes, **Fit** fits the boxes to the panel height (and makes them square again), **+** bigger boxes. |
 | **View > Days** | How many trading sessions of history to show (1 to 15). |
 | **Bell** | Turns alert sounds on or off (remembered by the browser). |
 | **Alert log** | Opens the last 30 alerts and errors; the badge counts new ones. |
@@ -275,6 +275,11 @@ Inside each panel:
 - **Chart:** the dashed blue line and blue axis tag mark the current price; the yellow and light-black tags mark the current VWAP and VWMA 10; dotted vertical lines separate sessions.
 - **Hover:** shows the box's price, the minute it printed, the VWAP and VWMA 10 at that column, and the signal name if it is a signal box.
 - **Scrolling:** charts follow the newest column automatically; scroll back to browse history, and scroll to the right end to resume following.
+  Expanding or restoring a chart also takes it back to the newest column.
+- **Vertical stretch:** drag any chart's price axis up to make the boxes of all three charts taller, down to make them shorter; the columns keep their width.
+  A chart following its newest column keeps its current price in place; otherwise the price you grabbed (or, on the other charts, the middle) stays put.
+  Double-click an axis (or press **Fit**) for square boxes again.
+  The stretch carries over when the charts are rebuilt and lasts until the page reloads.
 
 ## Alerts
 

@@ -66,6 +66,7 @@ const state = {
   speed: readStored(SPEED_KEY, 1, (v) => SPEEDS.includes(v)),
   overlays: loadOverlays(),
   cellOverride: null,
+  rowScale: 1, // box height / width on every chart, set by dragging a price axis
   alerted: new Set(),
   started: false, // Play pressed at least once since the run loaded
   loading: false, // a new run is loading: the old one cannot be played meanwhile
@@ -302,10 +303,11 @@ function buildPanels(charts) {
     const root = els.template.content.firstElementChild.cloneNode(true);
     root.classList.toggle('atm', def.offset === 0);
     els.charts.append(root);
-    mountExpand(root, def.offset);
-    const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip });
+    const panel = new PnfPanel(root.querySelector('.plot'), { onHover: showTooltip, onRowScale: setRowScale });
     panel.setCell(state.cellOverride);
+    panel.matchRowScale(state.rowScale);
     panel.setOverlays(state.overlays);
+    mountExpand(root, def.offset, () => panel.followLatest());
     const entry = { root, panel, def, trade: null, closed: [] };
     state.panels.set(def.key, entry);
     wireTrades(entry);
@@ -726,8 +728,15 @@ els.overlays.addEventListener('change', (e) => {
   renderOverlayToggles();
 });
 
+/** A price-axis drag on one chart stretches or squeezes the boxes of all of them. */
+function setRowScale(scale) {
+  state.rowScale = scale;
+  for (const { panel } of state.panels.values()) panel.matchRowScale(scale);
+}
+
 function setZoom(cellOverride) {
   state.cellOverride = cellOverride;
+  if (cellOverride === null) state.rowScale = 1; // Fit makes the boxes square again (PnfPanel.setCell)
   for (const { panel } of state.panels.values()) panel.setCell(cellOverride);
   els.zoomFit.setAttribute('aria-pressed', String(cellOverride == null));
 }
