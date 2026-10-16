@@ -4,7 +4,7 @@ A run covers the trading days from start_date to end_date (both before
 today), replayed back-to-back on one chart like the live page's multi-day
 view. Strikes are fixed for the whole run from the start day's index open
 (or an ATM the user sets). Expired contracts cannot be fetched from the
-API, so the run uses one of the next four listed expiries.
+API, so the run uses one of the next few listed expiries.
 """
 
 import logging
@@ -17,7 +17,10 @@ from pnf.series import IST, Underlying, in_session, now_ist, round_to_strike, se
 
 log = logging.getLogger(__name__)
 
-EXPIRIES_OFFERED = 4  # the next four listed expiries (NIFTY: Tuesdays, SENSEX: Thursdays)
+# How many of the next listed expiries are offered: four weeklies (NIFTY: Tuesdays,
+# SENSEX: Thursdays), or the next two monthlies where there are no weeklies (BANKNIFTY).
+EXPIRIES_OFFERED = 4
+MONTHLIES_OFFERED = 2
 MAX_RANGE_DAYS = 30  # the history API serves at most 30 days of 1-minute candles per request
 
 
@@ -46,10 +49,14 @@ def validate_dates(start: date, end: date, today: date) -> None:
         raise SimError("The history API serves at most 5 years back; pick a later start date.")
 
 
-def offered_expiries(listed: list[str], today: date) -> list[date]:
-    """The next EXPIRIES_OFFERED listed expiries on or after today, nearest first."""
+def offered_expiries(listed: list[str], today: date, u: Underlying) -> list[date]:
+    """The next listed expiries on or after today, nearest first.
+
+    Without weeklies the listed expiries are the monthlies (and further out the
+    quarterlies), so the next two listed are the next two monthlies.
+    """
     upcoming = sorted({d for d in (date.fromisoformat(e) for e in listed) if d >= today})
-    return upcoming[:EXPIRIES_OFFERED]
+    return upcoming[: EXPIRIES_OFFERED if u.weekly else MONTHLIES_OFFERED]
 
 
 def session_candles(raw: list) -> dict[int, list[float]]:
@@ -217,7 +224,7 @@ async def _leg_candles(gw: NeoGateway, neosymbol: str, context_day: date | None,
 
 # Used only if the contract list cannot be read; lot sizes change over time, so the
 # exchange's own figure is preferred.
-FALLBACK_LOT_SIZES = {"NIFTY": 65, "SENSEX": 20}
+FALLBACK_LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20}
 
 
 async def contract_lot_size(gw: NeoGateway, u: Underlying, expiry: date) -> int:

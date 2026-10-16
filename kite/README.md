@@ -109,10 +109,10 @@ Each order takes one extra hop (this machine -> the host -> Kite), typically 50 
 
 ## How orders are placed
 
-- **Quantity** is in units and must be a multiple of the contract's lot size (65 for NIFTY, 20 for SENSEX at the time of writing; the page reads it from Kite's contract list for each expiry and shows the lot count next to the field).
+- **Quantity** is in units and must be a multiple of the contract's lot size (65 for NIFTY, 30 for BANKNIFTY, 20 for SENSEX at the time of writing; the page reads it from Kite's contract list for each expiry and shows the lot count next to the field).
   The field starts at the last quantity you sold on that index, or one lot.
 - **Orders** are MARKET orders with Kite's automatic market protection (`market_protection=-1`, required for API market orders since April 2026), DAY validity, tagged `pnf` (visible in Kite's order book).
-  An order is a single order up to the exchange's maximum quantity per order (the freeze quantity: 3,510 for NIFTY, 1,000 for SENSEX); above it, Kite splits it into orders of at most that size (autoslice).
+  An order is a single order up to the exchange's maximum quantity per order (the freeze quantity: 3,510 for NIFTY, 1,440 for BANKNIFTY, 1,000 for SENSEX); above it, Kite splits it into orders of at most that size (autoslice).
   Kite refuses to slice anything smaller ("Quantity should be greater than or equal to 1000 for order slicing"), so slicing is asked for only when needed.
   The maximums are `max_order_qty` in `pnf/series.py` `UNDERLYINGS`; update them there when the exchanges revise them.
 - **Sell** places the CE order and then straight away the PE, without waiting for fills.

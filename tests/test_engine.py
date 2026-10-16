@@ -28,6 +28,7 @@ def candles_for(day: date, minutes: int, base: float) -> list:
 QUOTES = {
     "NIFTY": {"ltp": 22520.45, "open": 22314.95, "prev_close": 22231.8},
     "SENSEX": {"ltp": 72472.33, "open": 72349.5, "prev_close": 71593.24},
+    "BANKNIFTY": {"ltp": 55927.15, "open": 55861.4, "prev_close": 55810.5},
 }
 
 
@@ -49,6 +50,8 @@ class FakeGateway:
 
     async def expiries(self, u):
         self.expiry_calls.append(u.key)
+        if u.key == "BANKNIFTY":  # monthlies, then a quarterly
+            return ["2026-10-27", "2026-11-24", "2026-12-29", "2027-03-30"]
         return ["2026-10-27", "2026-10-20", "2026-10-13", "2026-11-24"]
 
     async def index_quote(self, u):
@@ -223,25 +226,69 @@ def test_sensex_builds_from_bse_with_its_own_strikes(clock, make_engine):
     assert eng.snapshot()["config"]["built"] == UNDERLYINGS["SENSEX"].to_json()
 
 
-def test_each_underlying_keeps_its_own_atm_override(clock, make_engine):
+def test_each_underlying_keeps_its_own_atm_override_and_expiry(clock, make_engine):
     async def scenario(eng):
-        eng.configure("SENSEX", 3, "week1", atm=72500)
-        eng.configure("NIFTY", 3, "week1")  # switching back: NIFTY's choice is kept
+        eng.configure("NIFTY", 3, "week2")
+        eng.configure("SENSEX", 3, atm=72500)
+        eng.configure("BANKNIFTY", 3, "month2")
+        eng.configure("NIFTY", 3)  # switching back: NIFTY's choices are kept
         eng._build_task.cancel()
 
     eng = make_engine()
     asyncio.run(scenario(eng))
-    assert eng.atm_overrides == {"NIFTY": None, "SENSEX": 72500}
-    assert eng.underlying_key == "NIFTY"
+    assert eng.atm_overrides == {"NIFTY": None, "BANKNIFTY": None, "SENSEX": 72500}
+    assert eng.expiry_role_of == {"NIFTY": "week2", "BANKNIFTY": "month2", "SENSEX": "week1"}
+    assert (eng.underlying_key, eng.expiry_role) == ("NIFTY", "week2")
     restored = make_engine()
-    assert restored.atm_overrides == {"NIFTY": None, "SENSEX": 72500}
+    assert restored.atm_overrides == eng.atm_overrides
+    assert restored.expiry_role_of == eng.expiry_role_of
+
+
+def test_an_expiry_role_the_underlying_lacks_is_refused(make_engine):
+    eng = make_engine()
+    with pytest.raises(ValueError, match="BANKNIFTY has no week1 expiry"):
+        eng.configure("BANKNIFTY", 3, "week1")
+    assert eng.underlying_key == "NIFTY"
 
 
 def test_old_config_file_with_a_single_override_still_loads(make_engine):
     engine_mod.CONFIG_FILE.write_text('{"atm": 22400, "days": 5, "expiry": "month1"}')
     eng = make_engine()
-    assert eng.atm_overrides == {"NIFTY": 22400, "SENSEX": None}
+    assert eng.atm_overrides == {"NIFTY": 22400, "BANKNIFTY": None, "SENSEX": None}
     assert (eng.underlying_key, eng.days, eng.expiry_role) == ("NIFTY", 5, "month1")
+    assert eng.expiry_role_of == {"NIFTY": "month1", "BANKNIFTY": "month1", "SENSEX": "month1"}
+
+
+def test_old_shared_weekly_role_gives_banknifty_its_monthly(make_engine):
+    engine_mod.CONFIG_FILE.write_text('{"underlying": "SENSEX", "atm": {}, "days": 3, "expiry": "week2"}')
+    eng = make_engine()
+    assert eng.expiry_role_of == {"NIFTY": "week2", "BANKNIFTY": "month1", "SENSEX": "week2"}
+
+
+def test_banknifty_builds_monthly_straddles_on_nse(clock, make_engine):
+    async def scenario(eng):
+        await eng._build()
+        eng.gw.logged_in = True
+        task = asyncio.create_task(eng._run_feed())
+        while len(eng.gw.subscriptions) < 2:
+            await asyncio.sleep(0.01)
+        task.cancel()
+
+    eng = make_engine()
+    eng.underlying_key = "BANKNIFTY"
+    asyncio.run(scenario(eng))
+    assert eng.phase == "ready"
+    assert eng.expiry == date(2026, 10, 27)  # its first monthly; there are no weeklies
+    assert [(o["role"], o["date"]) for o in eng.expiry_options] == [
+        ("month1", "2026-10-27"),
+        ("month2", "2026-11-24"),
+    ]
+    assert eng.atm == 55900  # open 55,861.40 on the 100-point grid
+    assert [c.strike for c in eng.charts] == [55400, 55900, 56400]
+    assert eng.charts[1].ce["key"] == "nse_fo|55900CE"
+    snap = eng.snapshot()["config"]
+    assert (snap["expiryRole"], snap["built"]["key"]) == ("month1", "BANKNIFTY")
+    assert dict(eng.gw.subscriptions)["index"] == [("nse_cm", "Nifty Bank")]
 
 
 def test_live_feed_subscribes_to_the_built_exchange(clock, make_engine):
@@ -268,7 +315,7 @@ def test_live_feed_subscribes_to_the_built_exchange(clock, make_engine):
 
 def test_expiry_role_selects_contract_and_lists_options(clock, make_engine):
     eng = make_engine()
-    eng.expiry_role = "month2"
+    eng.expiry_role_of["NIFTY"] = "month2"
     asyncio.run(eng._build())
     assert eng.expiry == date(2026, 11, 24)
     assert [o["role"] for o in eng.expiry_options] == ["week1", "week2", "month1", "month2"]
@@ -696,3 +743,24 @@ def test_errors_shown_on_a_page_go_into_the_alert_log(clock, make_engine):
     # An error entry has no signal fields, and a signal still needs them.
     assert http.post("/api/alerts", json={"type": "error", "key": "x"}).status_code == 422
     assert http.post("/api/alerts", json={**error, "type": "sell"}).status_code == 422
+
+
+def test_config_endpoint_switches_index_keeping_its_expiry(make_engine):
+    from fastapi.testclient import TestClient
+
+    import pnf.app
+
+    eng = make_engine()
+    eng.rebuild = lambda: None  # only the stored choices matter here
+    pnf.app.app.state.engine = eng
+    http = TestClient(pnf.app.app)
+    assert http.post(
+        "/api/config", json={"underlying": "BANKNIFTY", "days": 3, "expiry": "month2"}
+    ).is_success
+    assert http.post("/api/config", json={"underlying": "NIFTY", "days": 3}).is_success
+    assert eng.expiry_role_of == {"NIFTY": "week1", "BANKNIFTY": "month2", "SENSEX": "week1"}
+    # BANKNIFTY has no weeklies, and an unknown index is refused.
+    refused = http.post("/api/config", json={"underlying": "BANKNIFTY", "days": 3, "expiry": "week1"})
+    assert refused.status_code == 422 and "no weekly expiry" in refused.json()["detail"]
+    assert http.post("/api/config", json={"underlying": "FINNIFTY", "days": 3}).status_code == 422
+    assert eng.underlying_key == "NIFTY"

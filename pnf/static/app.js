@@ -9,7 +9,7 @@ const MAX_DAYS = 15;
 const $ = (id) => document.getElementById(id);
 const els = {
   brandTitle: $('brand-title'),
-  underlyings: $('underlyings'),
+  underlying: $('underlying'),
   spotStat: $('spot-stat'),
   spot: $('spot'),
   spotChg: $('spot-chg'),
@@ -255,25 +255,12 @@ const builtKey = () => state.config?.built.key ?? '';
 
 function renderUnderlyings(cfg) {
   const keys = cfg.underlyings ?? [];
-  if (els.underlyings.dataset.keys !== keys.join()) {
-    els.underlyings.replaceChildren(...keys.map((key) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = key;
-      btn.dataset.key = key;
-      btn.addEventListener('click', () => {
-        if (key === state.config?.underlying) return;
-        state.atmDirty = false;
-        // No `atm`: the server restores that index's own ATM choice.
-        submitConfig({ underlying: key }).then(renderTopbar);
-      });
-      return btn;
-    }));
-    els.underlyings.dataset.keys = keys.join();
+  if (els.underlying.dataset.keys !== keys.join()) {
+    els.underlying.replaceChildren(...keys.map((key) => new Option(key, key)));
+    els.underlying.dataset.keys = keys.join();
   }
-  for (const btn of els.underlyings.children) {
-    btn.setAttribute('aria-pressed', String(btn.dataset.key === cfg.underlying));
-  }
+  // The latest choice, even while its charts are still loading.
+  els.underlying.value = cfg.underlying;
 }
 
 // ---------------- Alert log ----------------
@@ -451,7 +438,9 @@ function renderExpiryOptions(cfg) {
   // Select by date: a role folded into another (same contract) still shows as chosen.
   const current = options.find((o) => o.date === cfg.expiry);
   if (current) els.expiry.value = current.role;
-  els.expiry.disabled = !options.length;
+  // The options belong to the charts on screen: while another index loads, they
+  // are not that index's to pick from (BANKNIFTY has monthlies only).
+  els.expiry.disabled = !options.length || cfg.underlying !== cfg.built.key;
 }
 
 function renderBanner() {
@@ -572,6 +561,7 @@ const handlers = {
   },
   status(msg) {
     state.status = msg;
+    if (state.config) state.config.underlying = msg.underlying; // a switch, in every tab
     if (msg.feed.loggedIn) state.wantLogin = false;
     if (msg.feed.state !== 'live') applyLive(null);
     renderAll();
@@ -630,23 +620,24 @@ async function post(url, body) {
 }
 
 /**
- * Post the current controls, with `overrides` taking precedence. `atm` is sent
- * only when the user set it (a strike, or null for Auto); otherwise the server
- * keeps the stored choice for that index.
+ * Post the current controls, with `overrides` taking precedence. `atm` and
+ * `expiry` are sent only when the user set them (`atm`: a strike, or null for
+ * Auto); otherwise the server keeps the stored choice for that index.
  */
 async function submitConfig(overrides = {}) {
   const body = {
     underlying: state.config?.underlying ?? 'NIFTY',
     days: Number(els.days.value),
-    expiry: els.expiry.value || state.config?.expiryRole || 'week1',
     ...overrides,
   };
   try {
     await post('/api/config', body);
     state.atmDirty = false;
+    return true;
   } catch (err) {
     state.status = { ...state.status, phase: 'error', message: err.message };
     renderAll();
+    return false;
   }
 }
 
@@ -686,7 +677,21 @@ els.atm.addEventListener('keydown', (e) => {
 });
 
 els.days.addEventListener('change', () => submitConfig());
-els.expiry.addEventListener('change', () => submitConfig());
+els.expiry.addEventListener('change', () => submitConfig({ expiry: els.expiry.value }));
+
+els.underlying.addEventListener('change', () => {
+  if (!state.config) return;
+  const previous = state.config.underlying;
+  // Shown as chosen at once (the server's status confirms it), so a tick
+  // re-rendering the menu before then does not flip it back.
+  state.config.underlying = els.underlying.value;
+  state.atmDirty = false;
+  // Neither `atm` nor `expiry`: the server restores that index's own choices.
+  submitConfig({ underlying: els.underlying.value }).then((ok) => {
+    if (!ok) state.config.underlying = previous;
+    renderTopbar();
+  });
+});
 
 function renderSound() {
   const on = soundEnabled();

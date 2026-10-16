@@ -9,6 +9,7 @@ from kiteconnect import exceptions as kex
 
 NIFTY_EXPIRIES = [date(2026, 10, 13), date(2026, 10, 20), date(2026, 10, 27)]
 SENSEX_EXPIRIES = [date(2026, 10, 15), date(2026, 10, 22)]
+BANKNIFTY_EXPIRIES = [date(2026, 10, 27), date(2026, 11, 24)]  # monthlies only
 
 
 def _instrument_rows(name, exchange, expiries, strikes, lot_size, token_base, code):
@@ -55,7 +56,7 @@ def _instrument_rows(name, exchange, expiries, strikes, lot_size, token_base, co
 
 
 # The exchanges' maximum quantity per order (freeze quantity), by underlying.
-FREEZE_QUANTITY = {"NIFTY": 3510, "SENSEX": 1000, "BANKNIFTY": 600}
+FREEZE_QUANTITY = {"NIFTY": 3510, "SENSEX": 1000, "BANKNIFTY": 1440, "FINNIFTY": 1800}
 
 
 def freeze_quantity(tradingsymbol: str) -> int:
@@ -67,12 +68,19 @@ def weekly_code(d: date) -> str:
     return f"{'123456789OND'[d.month - 1]}{d.day:02d}"
 
 
+def monthly_code(d: date) -> str:
+    return f"{d:%b}".upper()
+
+
 INSTRUMENTS = {
     "NFO": _instrument_rows(
         "NIFTY", "NFO", NIFTY_EXPIRIES, range(21000, 23550, 50), 65, 10_000_000, weekly_code
     )
     + _instrument_rows(
-        "BANKNIFTY", "NFO", NIFTY_EXPIRIES[:1], range(48000, 48300, 100), 30, 11_000_000, weekly_code
+        "BANKNIFTY", "NFO", BANKNIFTY_EXPIRIES, range(55500, 56600, 100), 30, 11_000_000, monthly_code
+    )
+    + _instrument_rows(  # not a charted index
+        "FINNIFTY", "NFO", NIFTY_EXPIRIES[2:], range(24000, 24300, 100), 60, 12_000_000, monthly_code
     ),
     "BFO": _instrument_rows(
         "SENSEX", "BFO", SENSEX_EXPIRIES, range(70000, 75100, 100), 20, 20_000_000, weekly_code

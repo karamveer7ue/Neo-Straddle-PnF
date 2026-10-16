@@ -71,8 +71,10 @@ def test_contract_book_finds_index_options_on_each_exchange():
     sensex = b.option("SENSEX", date(2026, 10, 15), 72300, "PE")
     assert (sensex.exchange, sensex.lot_size) == ("BFO", 20)
     assert b.by_key(f"NFO:{CE}") == ce
-    # Other names (BANKNIFTY), futures and unlisted strikes are not straddles here.
-    assert b.option("BANKNIFTY", NIFTY_EXPIRY, 48000, "CE") is None
+    bank = b.option("BANKNIFTY", date(2026, 10, 27), 56000, "CE")
+    assert (bank.exchange, bank.tradingsymbol, bank.lot_size) == ("NFO", "BANKNIFTY26OCT56000CE", 30)
+    # Other names (FINNIFTY), futures and unlisted strikes are not straddles here.
+    assert b.option("FINNIFTY", date(2026, 10, 27), 24000, "CE") is None
     assert b.straddle("NIFTY", NIFTY_EXPIRY, 22325) is None
     assert b.lot_sizes()["NIFTY|2026-10-20"] == 65
     assert b.lot_sizes()["SENSEX|2026-10-22"] == 20
@@ -476,10 +478,27 @@ def test_orders_are_sliced_only_above_the_exchanges_maximum(connected):
     assert all(r["quantity"] == 0 for r in fake.positions()["net"])
 
 
+def test_banknifty_sells_its_monthly_straddle_and_slices_above_its_maximum(connected):
+    b, fake = connected(max_lots=60)
+    bank = date(2026, 10, 27)
+    res = asyncio.run(b.sell("BANKNIFTY", bank, 56000, 1440))  # 48 lots: one order per leg
+    assert [r["ok"] for r in res["results"]] == [True, True]
+    assert fake.calls[-2:] == ["place_order", "place_order"]
+    assert [p["tradingsymbol"] for p in fake.placed[-2:]] == [
+        "BANKNIFTY26OCT56000CE",
+        "BANKNIFTY26OCT56000PE",
+    ]
+    asyncio.run(b.sell("BANKNIFTY", bank, 56000, 30))
+    asyncio.run(b.exit("BANKNIFTY|2026-10-27|56000", 1))  # 1,470 is above it: sliced
+    assert fake.calls[-2:] == ["place_autoslice_order", "place_autoslice_order"]
+    assert [p["quantity"] for p in fake.placed[-4:]] == [1440, 30, 1440, 30]
+
+
 def test_the_maximum_order_quantities_are_the_exchanges():
     from pnf.series import UNDERLYINGS
 
     assert UNDERLYINGS["NIFTY"].max_order_qty == 3510
+    assert UNDERLYINGS["BANKNIFTY"].max_order_qty == 1440  # 48 lots of 30
     assert UNDERLYINGS["SENSEX"].max_order_qty == 1000
 
 

@@ -1,4 +1,4 @@
-"""FastAPI server for the NIFTY straddle Point & Figure screen."""
+"""FastAPI server for the index straddle Point & Figure screen."""
 
 import asyncio
 import logging
@@ -16,7 +16,15 @@ import kite.web
 
 from .engine import KEEP, Engine
 from .neo import NeoError, NeoGateway
-from .series import DEFAULT_EXPIRY_ROLE, DEFAULT_UNDERLYING, MAX_DAYS, MIN_DAYS, UNDERLYINGS
+from .series import (
+    DEFAULT_UNDERLYING,
+    EXPIRY_ROLES,
+    MAX_DAYS,
+    MIN_DAYS,
+    UNDERLYINGS,
+    ExpiryRole,
+    UnderlyingKey,
+)
 from .static_files import RevalidatingStaticFiles
 
 STATIC = Path(__file__).parent / "static"
@@ -49,7 +57,7 @@ async def lifespan(app: FastAPI):
     await app.state.engine.stop()
 
 
-app = FastAPI(title="NIFTY straddle P&F", lifespan=lifespan)
+app = FastAPI(title="Straddle P&F", lifespan=lifespan)
 app.mount("/static", RevalidatingStaticFiles(directory=STATIC), name="static")
 kite.web.install(app)  # order placement and positions through Zerodha Kite
 
@@ -59,18 +67,19 @@ class LoginBody(BaseModel):
 
 
 class ConfigBody(BaseModel):
-    underlying: Literal["NIFTY", "SENSEX"] = DEFAULT_UNDERLYING
+    underlying: UnderlyingKey = DEFAULT_UNDERLYING
     # An override strike for `underlying`, or None for the day's open. Leaving the
     # field out keeps that underlying's stored choice (used when switching index).
     atm: int | None = Field(default=None, ge=1000, le=1_000_000)
     days: int = Field(ge=MIN_DAYS, le=MAX_DAYS)
-    expiry: Literal["week1", "week2", "month1", "month2"] = DEFAULT_EXPIRY_ROLE
+    # An expiry role `underlying` offers; leaving it out keeps its stored choice.
+    expiry: ExpiryRole | None = None
 
 
 class SignalAlert(BaseModel):
     key: str = Field(min_length=1, max_length=200)  # identifies the signal, for de-duplication
     type: Literal["buy", "sell"]
-    underlying: Literal["NIFTY", "SENSEX"]
+    underlying: UnderlyingKey
     offset: int
     strike: int
     expiry: str | None = Field(default=None, max_length=10)
@@ -107,11 +116,14 @@ async def login(body: LoginBody):
 
 @app.post("/api/config", status_code=202)
 async def configure(body: ConfigBody):
-    step = UNDERLYINGS[body.underlying].strike_step
-    if body.atm is not None and body.atm % step:
-        raise HTTPException(status_code=422, detail=f"{body.underlying} ATM must be a multiple of {step}")
+    u = UNDERLYINGS[body.underlying]
+    if body.atm is not None and body.atm % u.strike_step:
+        raise HTTPException(status_code=422, detail=f"{u.key} ATM must be a multiple of {u.strike_step}")
+    if body.expiry is not None and body.expiry not in u.expiry_roles:
+        raise HTTPException(status_code=422, detail=f"{u.key} has no {EXPIRY_ROLES[body.expiry]} expiry")
     atm = body.atm if "atm" in body.model_fields_set else KEEP
-    app.state.engine.configure(body.underlying, body.days, body.expiry, atm=atm)
+    expiry = body.expiry if body.expiry is not None else KEEP
+    app.state.engine.configure(body.underlying, body.days, expiry, atm=atm)
     return body.model_dump()
 
 

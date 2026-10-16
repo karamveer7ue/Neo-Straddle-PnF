@@ -100,7 +100,26 @@ button, input, select { font: inherit; color: inherit; }
   letter-spacing: -0.01em;
 }
 
-/* NIFTY | SENSEX switch */
+/* Index menu: names the charts on screen, so it reads like a title */
+.index-select {
+  height: 30px;
+  padding: 0 4px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  outline: none;
+  cursor: pointer;
+}
+
+.index-select:hover { border-color: var(--text-3); }
+.index-select:focus-visible { border-color: var(--accent); }
+.index-select option { color: var(--text-1); font-weight: 500; }
+
+/* Segmented switch (the simulator's speeds) */
 .segmented {
   display: inline-flex;
   padding: 2px;
@@ -769,7 +788,7 @@ button, input, select { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 
 @media (max-width: 1700px) {
-  .brand { display: none; } /* the index toggle names what is on screen */
+  .brand { display: none; } /* the index menu names what is on screen */
 }
 
 @media (max-width: 1440px) {

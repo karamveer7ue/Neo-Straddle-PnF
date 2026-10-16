@@ -1,4 +1,4 @@
-"""Pure helpers for building NIFTY straddle 1-min close series.
+"""Pure helpers for building index straddle 1-min close series.
 
 Nothing in here talks to the network, so it is unit-tested directly
 (tests/test_series.py). Timestamps are epoch seconds of the candle's
@@ -8,6 +8,7 @@ minute start; all calendar logic is in IST.
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -27,6 +28,16 @@ class Underlying:
     strike_step: int
     side_offset: int  # the side charts sit at ATM - offset and ATM + offset
     max_order_qty: int  # the exchange's freeze quantity: the most one option order may carry
+    weekly: bool = True  # lists weekly expiries; BANKNIFTY has monthlies only
+
+    @property
+    def expiry_roles(self) -> tuple[str, ...]:
+        """The expiry roles this underlying offers (see EXPIRY_ROLES)."""
+        return tuple(EXPIRY_ROLES) if self.weekly else ("month1", "month2")
+
+    @property
+    def default_expiry_role(self) -> str:
+        return self.expiry_roles[0]
 
     @property
     def chart_offsets(self) -> dict[str, int]:
@@ -37,16 +48,29 @@ class Underlying:
         return {"key": self.key, "strikeStep": self.strike_step, "sideOffset": self.side_offset}
 
 
-# NIFTY trades on NSE; SENSEX on BSE. Both index tokens are names, not numbers.
+# NIFTY and BANKNIFTY trade on NSE; SENSEX on BSE. Index tokens are names, not numbers.
+# The order is the index menu's. max_order_qty is one below the scrip master's
+# lFreezeQty on NSE (an order must stay under it) and equal to it on BSE.
 UNDERLYINGS = {
     "NIFTY": Underlying(
         "NIFTY", "nse_fo", "nse_cm", "Nifty 50", strike_step=50, side_offset=200, max_order_qty=3510
+    ),
+    "BANKNIFTY": Underlying(
+        "BANKNIFTY",
+        "nse_fo",
+        "nse_cm",
+        "Nifty Bank",
+        strike_step=100,
+        side_offset=500,
+        max_order_qty=1440,
+        weekly=False,
     ),
     "SENSEX": Underlying(
         "SENSEX", "bse_fo", "bse_cm", "SENSEX", strike_step=100, side_offset=500, max_order_qty=1000
     ),
 }
 DEFAULT_UNDERLYING = "NIFTY"
+UnderlyingKey = Literal[tuple(UNDERLYINGS)]  # request validation: one of the UNDERLYINGS keys
 
 MIN_DAYS, MAX_DAYS = 1, 15  # 15 trading days stays inside one 30-day 1-min request
 
@@ -74,14 +98,15 @@ EXPIRY_ROLES = {
     "month1": "monthly",
     "month2": "next monthly",
 }
-DEFAULT_EXPIRY_ROLE = "week1"
+ExpiryRole = Literal[tuple(EXPIRY_ROLES)]
 
 
-def expiry_roles(expiries: list[str], today: date) -> dict[str, date]:
+def expiry_roles(expiries: list[str], today: date, weekly: bool = True) -> dict[str, date]:
     """Date of each role: the next two weeklies and the next two monthlies.
 
     A monthly is the last listed expiry of its calendar month. Roles can
-    share a date (late in a month the next weekly is the monthly).
+    share a date (late in a month the next weekly is the monthly). Without
+    weeklies (`weekly` False) only the monthly roles are returned.
     """
     upcoming = sorted({d for d in (date.fromisoformat(e) for e in expiries) if d >= today})
     if not upcoming:
@@ -90,11 +115,13 @@ def expiry_roles(expiries: list[str], today: date) -> dict[str, date]:
     for d in upcoming:
         month_end[(d.year, d.month)] = d  # ascending, so the month's last wins
     monthlies = sorted(month_end.values())
-    roles = {"week1": upcoming[0], "month1": monthlies[0]}
-    if len(upcoming) > 1:
-        roles["week2"] = upcoming[1]
+    roles = {"month1": monthlies[0]}
     if len(monthlies) > 1:
         roles["month2"] = monthlies[1]
+    if weekly:
+        roles["week1"] = upcoming[0]
+        if len(upcoming) > 1:
+            roles["week2"] = upcoming[1]
     return roles
 
 

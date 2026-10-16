@@ -28,6 +28,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSo
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
+from pnf.series import UnderlyingKey
 from pnf.static_files import RevalidatingStaticFiles
 
 from .broker import DEFAULT_MAX_LOTS, DEFAULT_PRODUCT, KiteBroker
@@ -96,7 +97,7 @@ def broker_of(request: Request) -> KiteBroker:
 
 
 class SellBody(BaseModel):
-    underlying: Literal["NIFTY", "SENSEX"]
+    underlying: UnderlyingKey
     expiry: date
     strike: int = Field(ge=1000, le=1_000_000)
     quantity: int = Field(ge=1, le=1_000_000)

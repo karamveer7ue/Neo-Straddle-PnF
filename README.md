@@ -1,8 +1,8 @@
 # Neo Straddle PnF
 
-Live Point & Figure charts for NIFTY and SENSEX option straddles, built on the [Kotak Neo trade API](https://github.com/Kotak-Neo/kotak-neo-python).
+Live Point & Figure charts for NIFTY, BANKNIFTY and SENSEX option straddles, built on the [Kotak Neo trade API](https://github.com/Kotak-Neo/kotak-neo-python).
 
-The screen shows three straddles of the chosen index side by side - ATM - 200, ATM and ATM + 200 for NIFTY (NSE), or ATM - 500, ATM and ATM + 500 for SENSEX (BSE) - each as a Point & Figure chart built from 1-minute closes with a 0.5% box and 3-box reversal.
+The screen shows three straddles of the chosen index side by side - ATM - 200, ATM and ATM + 200 for NIFTY (NSE), or ATM - 500, ATM and ATM + 500 for BANKNIFTY (NSE) and SENSEX (BSE) - each as a Point & Figure chart built from 1-minute closes with a 0.5% box and 3-box reversal.
 History comes from the Neo historical API, live prices stream over the Neo WebSocket, and every chart carries the intraday VWAP and a 10-column simple moving average (switch either on or off) plus double top buy / double bottom sell markers, with on-screen and audio alerts when a double bottom sell prints below VWAP.
 
 ![Three NIFTY straddle Point & Figure charts with VWAP and signal markers](docs/screenshot.png)
@@ -29,12 +29,12 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 
 ## Features
 
-- **NIFTY or SENSEX:** switch with one click; NIFTY options come from NSE, SENSEX options from BSE.
+- **NIFTY, BANKNIFTY or SENSEX:** pick the index from the menu at the left of the top bar; NIFTY and BANKNIFTY options come from NSE, SENSEX options from BSE.
 - **Spot and future:** the index price and the near-month future price, each with its change since the previous close in points and %, live in the top bar.
-- **Three straddles at once:** ATM and two side strikes (± 200 for NIFTY, ± 500 for SENSEX), laid out horizontally.
+- **Three straddles at once:** ATM and two side strikes (± 200 for NIFTY, ± 500 for BANKNIFTY and SENSEX), laid out horizontally.
 - **Point & Figure on 1-minute closes:** box size fixed at 0.5% of the first straddle close in the window, 3-box reversal.
 - **ATM from today's open or your own strike:** the default ATM is the index's open rounded to the nearest strike; type any strike to override it.
-- **Expiry picker:** upcoming weekly, next weekly, this month's monthly and next month's monthly.
+- **Expiry picker:** upcoming weekly, next weekly, this month's monthly and next month's monthly (BANKNIFTY has monthlies only, so just the two monthlies).
 - **History window:** 1 to 15 trading sessions.
 - **Live updates:** after a TOTP login on the page, prices stream in and a new 1-minute bar closes every minute; boxes from the minute still forming are drawn faded.
 - **VWAP and SMA 10:** the straddle's intraday VWAP (yellow) and a 10-column simple moving average (light black; soft grey in dark mode), each switchable on or off in the **View** menu, also shown in each panel header and on the price axis.
@@ -48,22 +48,24 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 
 ### Indices
 
-| Index | Options exchange | Strike step | Charts |
-| --- | --- | --- | --- |
-| NIFTY | NSE (`nse_fo`), index quoted on `nse_cm` as `Nifty 50` | 50 | ATM - 200, ATM, ATM + 200 |
-| SENSEX | BSE (`bse_fo`), index quoted on `bse_cm` as `SENSEX` | 100 | ATM - 500, ATM, ATM + 500 |
+| Index | Options exchange | Strike step | Charts | Expiries |
+| --- | --- | --- | --- | --- |
+| NIFTY | NSE (`nse_fo`), index quoted on `nse_cm` as `Nifty 50` | 50 | ATM - 200, ATM, ATM + 200 | weekly and monthly |
+| BANKNIFTY | NSE (`nse_fo`), index quoted on `nse_cm` as `Nifty Bank` | 100 | ATM - 500, ATM, ATM + 500 | monthly only |
+| SENSEX | BSE (`bse_fo`), index quoted on `bse_cm` as `SENSEX` | 100 | ATM - 500, ATM, ATM + 500 | weekly and monthly |
 
-The NIFTY | SENSEX switch in the top bar changes all three charts.
-Each index keeps its own ATM choice; the expiry choice and the number of days apply to both.
+The index menu in the top bar changes all three charts.
+Each index keeps its own ATM and expiry choice; the number of days applies to all of them.
 
 ### Strikes and expiry
 
 - **ATM:** by default the strike nearest to the day's index open (for example, a NIFTY open of 22,314.95 gives 22,300, and a SENSEX open of 71,776.67 gives 71,800).
-  The side charts sit at ATM ± 200 (NIFTY) or ATM ± 500 (SENSEX), and the strikes stay fixed for the whole day.
+  The side charts sit at ATM ± 200 (NIFTY) or ATM ± 500 (BANKNIFTY, SENSEX), and the strikes stay fixed for the whole day.
   At 09:16 on each new trading day the charts rebuild using that day's open.
-- **ATM override:** enter any valid strike (a multiple of 50 for NIFTY, 100 for SENSEX) in the ATM box to use it instead.
+- **ATM override:** enter any valid strike (a multiple of 50 for NIFTY, 100 for BANKNIFTY and SENSEX) in the ATM box to use it instead.
   The override stays in place for that index, across days and restarts, until you press **Auto**.
 - **Expiry:** pick from up to four contracts: the upcoming weekly, the next weekly, this month's monthly and next month's monthly.
+  BANKNIFTY has no weeklies, so it offers only this month's and next month's monthly.
   A monthly expiry is the last listed expiry of its calendar month.
   The app remembers which kind of expiry you picked rather than a fixed date, so after a contract expires the choice moves to the next one by itself.
   When a weekly falls on the monthly date it is listed once, as the monthly.
@@ -248,10 +250,10 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 
 | Control | What it does |
 | --- | --- |
-| **NIFTY / SENSEX** | Switches all three charts to the other index. |
+| **Index** (NIFTY / BANKNIFTY / SENSEX) | Switches all three charts to another index, with that index's own ATM and expiry choice. The expiry menu waits until the new charts have loaded. |
 | **Spot / Fut** | The index price and the near-month future (e.g. NIFTY26OCTFUT; hover for the contract and expiry), with their change since the previous close in points and % (just % on windows narrower than 1180px). The future rolls to the next month after expiry. |
 | **Expiry** | Switches all three charts to another contract. |
-| **ATM** | Type a strike (a multiple of 50 for NIFTY, 100 for SENSEX) and press Enter or **Apply**. Esc discards the edit. |
+| **ATM** | Type a strike (a multiple of 50 for NIFTY, 100 for BANKNIFTY and SENSEX) and press Enter or **Apply**. Esc discards the edit. |
 | **Auto** | Goes back to the ATM from today's index open. Hover it to see the open and the strike it gives. |
 | **View** | Opens a menu with the chart settings below; Esc or a click elsewhere closes it. |
 | **View > VWAP / SMA 10** | Show or hide each overlay on all three charts; VWAP is on and SMA 10 off until you change them (remembered by the browser). |
@@ -310,11 +312,11 @@ Setup (Kite Connect app, redirect URL, static IP registration), how orders are s
 - **Refreshing:** every 5 minutes during the session (and once at 15:36), today's official candles are fetched again and replace the live-built bars they cover.
 - **Daily rollover:** at 09:16 on each trading day the charts rebuild with the new day's ATM, expiry and history window.
 - **Holidays:** a weekday whose candles load fine but come back empty after 09:30 is treated as a market holiday and left out of the window.
-- **Saved settings:** the index on screen, each index's ATM override, the day count and the expiry choice are stored in `.pnf-config.json` (gitignored); the alert log in `.pnf-alerts.json`.
+- **Saved settings:** the index on screen, each index's ATM override and expiry choice, and the day count are stored in `.pnf-config.json` (gitignored); the alert log in `.pnf-alerts.json`.
 
 ## Simulator
 
-The simulator replays past NIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page, so you can watch how the straddles, VWAP, SMA 10 and the double top / double bottom signals developed on a day that has already traded.
+The simulator replays past NIFTY, BANKNIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page, so you can watch how the straddles, VWAP, SMA 10 and the double top / double bottom signals developed on a day that has already traded.
 
 ![The straddle simulator replaying a NIFTY session at 50X, mid-afternoon](docs/simulator.png)
 
@@ -336,13 +338,13 @@ Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY`
 
 ### Setting up a run
 
-1. Pick **NIFTY** or **SENSEX**.
-   Switching index loads that index's expiries first (a second or two); Load waits until they arrive, so a run always uses the index whose button is pressed.
-2. Pick an **expiry**: the next four listed expiries.
+1. Pick **NIFTY**, **BANKNIFTY** or **SENSEX** from the index menu.
+   Switching index loads that index's expiries first (a second or two); Load waits until they arrive, so a run always uses the index the menu shows.
+2. Pick an **expiry**: the next four listed expiries (for BANKNIFTY, which has monthlies only, the next two).
    NIFTY weeklies expire on Tuesdays and SENSEX weeklies on Thursdays; when the exchange moves an expiry for a holiday, the list shows the actual date (for example, 19 Oct 2026 is a Monday).
 3. Pick **From** and **To** dates.
    Both must be before today (the page and the server both check this), a run can cover at most 30 days, and the start can be at most 5 years back (the history API's limit).
-4. Optionally type an **ATM** strike (a multiple of 50 for NIFTY, 100 for SENSEX); leave it empty to use the strike nearest to the start day's index open.
+4. Optionally type an **ATM** strike (a multiple of 50 for NIFTY, 100 for BANKNIFTY and SENSEX); leave it empty to use the strike nearest to the start day's index open.
 5. Press **Load**.
    The history requests are paced to stay within the API's rate limits, so loading takes about 15 seconds.
    While it loads, the previous run is paused and cannot be played; if loading fails, the error is shown and the previous run stays as it was.
@@ -385,7 +387,7 @@ Keyboard shortcuts work anywhere on the page except while typing in a field (the
   The charts therefore start with history, as on the live page: SMA 10 has values from the first minute, signals are judged against the previous day's columns, and the box size comes from the context day's first close.
   VWAP itself restarts at each session's open, so the context day shows its own VWAP line and the From date's VWAP starts fresh at 09:15.
   The context day is not replayed and stays on the chart when you go back along the timeline; if a contract had not traded yet that day, its chart starts at the From date.
-- **Strikes** are fixed for the whole run, from the start day's index open (or the ATM you typed): ATM - 200, ATM and ATM + 200 for NIFTY, ATM - 500, ATM and ATM + 500 for SENSEX.
+- **Strikes** are fixed for the whole run, from the start day's index open (or the ATM you typed): ATM - 200, ATM and ATM + 200 for NIFTY, ATM - 500, ATM and ATM + 500 for BANKNIFTY and SENSEX.
 - **Chart rules** are the live page's: box size 0.5% of the first straddle close on the chart (the context day's), 3-box reversal, VWAP restarting at each session's open, SMA 10 of column midpoints.
 - **Movement within each minute:** the history API serves 1-minute candles, so each minute plays along its candle's likely path in four steps: open, the two extremes, then the close (a rising candle is taken to dip first, a falling one to rally first).
   The straddle prices, the CE and PE prices, the forming boxes (drawn faded, as on the live page), VWAP and the spot all move during the minute, and the minute's bar is completed at its close.
@@ -401,7 +403,7 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
 
 | Button | What it does |
 | --- | --- |
-| **Sell 10 lots** | Sells the straddle at the price on screen, including the minute still forming: 650 qty for NIFTY (65 per lot) or 200 qty for SENSEX (20 per lot), using the lot size from the exchange's contract list. One trade at a time per chart, so Sell is hidden while a trade is open. |
+| **Sell 10 lots** | Sells the straddle at the price on screen, including the minute still forming: 650 qty for NIFTY (65 per lot), 300 qty for BANKNIFTY (30 per lot) or 200 qty for SENSEX (20 per lot), using the lot size from the exchange's contract list. One trade at a time per chart, so Sell is hidden while a trade is open. |
 | **Exit 50%** | Buys back half of the open lots, rounded down to whole lots (10, 5, 3, 2, 1); disabled when only 1 lot is left. |
 | **Exit Full** | Buys back all open lots and closes the trade; Sell appears again. |
 
@@ -414,7 +416,7 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
 
 ### Which dates can be replayed
 
-- **Only contracts still listed today.** The API cannot fetch option contracts that have expired, so a past day is replayed with one of the next four listed expiries, not with the contract that was nearest on that day.
+- **Only contracts still listed today.** The API cannot fetch option contracts that have expired, so a past day is replayed with one of the next listed expiries, not with the contract that was nearest on that day.
   For example, on 12 Oct 2026 the 13 Oct weekly can replay the days before it, and so can the monthlies further out.
 - **How far back:** a weekly contract usually trades properly for only the last two or three weeks before its expiry (it is thin when first listed); monthlies reach further back.
   If the chosen contract had not started trading on the chosen dates, the simulator says so instead of showing empty charts.
@@ -468,7 +470,7 @@ node --test tests/*.test.mjs                   # P&F engine, simulator playback 
 
 ## Limitations
 
-- NIFTY and SENSEX only, with fixed side-strike distances (± 200 and ± 500).
+- NIFTY, BANKNIFTY and SENSEX only, with fixed side-strike distances (± 200, ± 500 and ± 500).
 - Box size (0.5%), reversal (3 boxes) and the SMA period (10 columns) are fixed in the code (`pnf/static/pnf.js`).
 - Alerts work only while the page is open in a browser tab.
 - This is a charting tool, not investment advice.

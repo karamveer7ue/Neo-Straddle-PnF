@@ -4,7 +4,7 @@ Owns the chart data (official 1-min history plus live-built minutes),
 the Neo WebSocket feed, and the browser connections it pushes to.
 
 Lifecycle:
-- build: for the chosen underlying (NIFTY on NSE or SENSEX on BSE), pick
+- build: for the chosen underlying (NIFTY or BANKNIFTY on NSE, SENSEX on BSE), pick
   the expiry and the ATM, resolve the six option legs and load N sessions
   of 1-min history. Needs only the consumer key.
 - login (TOTP from the browser) starts the live feed. Every minute close,
@@ -28,9 +28,7 @@ from neo_api_client.websocket.feed.exceptions import AuthenticationError
 
 from .neo import NeoError, NeoGateway
 from .series import (
-    DEFAULT_EXPIRY_ROLE,
     DEFAULT_UNDERLYING,
-    EXPIRY_ROLES,
     IST,
     MAX_DAYS,
     MIN_DAYS,
@@ -67,7 +65,7 @@ CLIENT_QUEUE_LIMIT = 5000  # pending messages per browser before a resync
 # A candle is used only once its minute ended this long ago; the newest
 # minutes come from live-built bars until a later refresh has final ones.
 CANDLE_SETTLE_SECONDS = 60
-KEEP = object()  # configure(): leave the underlying's ATM override as it is
+KEEP = object()  # configure(): leave the underlying's stored choice as it is
 
 
 @dataclass
@@ -121,12 +119,13 @@ class Engine:
         self.gw = gateway
         self.clients: set[asyncio.Queue] = set()
 
-        # User config. Each underlying keeps its own ATM override; the day
-        # count and expiry role (a generic "weekly"/"monthly") are shared.
+        # User config. Each underlying keeps its own ATM override and expiry role
+        # (a generic "weekly"/"monthly": BANKNIFTY offers monthlies only); the day
+        # count is shared.
         self.underlying_key = DEFAULT_UNDERLYING
         self.atm_overrides: dict[str, int | None] = dict.fromkeys(UNDERLYINGS)
+        self.expiry_role_of = {k: u.default_expiry_role for k, u in UNDERLYINGS.items()}
         self.days = DEFAULT_DAYS
-        self.expiry_role = DEFAULT_EXPIRY_ROLE
         self._load_config()
 
         # Build output
@@ -189,14 +188,22 @@ class Engine:
     def atm_override(self) -> int | None:
         return self.atm_overrides[self.underlying_key]
 
-    def configure(self, underlying: str, days: int, expiry_role: str, atm=KEEP) -> None:
-        """Apply new settings and rebuild. `atm` (an override or None for the
-        day's open) applies to `underlying`; KEEP leaves its stored override."""
+    @property
+    def expiry_role(self) -> str:
+        return self.expiry_role_of[self.underlying_key]
+
+    def configure(self, underlying: str, days: int, expiry_role=KEEP, atm=KEEP) -> None:
+        """Apply new settings and rebuild. `expiry_role` (one `underlying` offers) and
+        `atm` (an override, or None for the day's open) apply to `underlying`; KEEP
+        leaves its stored choice."""
+        if expiry_role is not KEEP and expiry_role not in UNDERLYINGS[underlying].expiry_roles:
+            raise ValueError(f"{underlying} has no {expiry_role} expiry")
         self.underlying_key = underlying
+        if expiry_role is not KEEP:
+            self.expiry_role_of[underlying] = expiry_role
         if atm is not KEEP:
             self.atm_overrides[underlying] = atm
         self.days = days
-        self.expiry_role = expiry_role
         self._save_config()
         self.rebuild()
 
@@ -208,16 +215,23 @@ class Engine:
             if not isinstance(atm, dict):  # older files held one NIFTY override
                 atm = {"NIFTY": atm}
             overrides = {k: atm.get(k) for k in UNDERLYINGS}
+            roles = saved.get("expiry", {})
+            if not isinstance(roles, dict):  # older files held one role for every underlying
+                roles = dict.fromkeys(UNDERLYINGS, roles)
+            # A role an underlying does not offer falls back to its default.
+            roles = {
+                k: roles.get(k) if roles.get(k) in u.expiry_roles else u.default_expiry_role
+                for k, u in UNDERLYINGS.items()
+            }
             underlying = saved.get("underlying", DEFAULT_UNDERLYING)
-            days, role = saved.get("days", DEFAULT_DAYS), saved.get("expiry", DEFAULT_EXPIRY_ROLE)
+            days = saved.get("days", DEFAULT_DAYS)
             if (
                 all(v is None or isinstance(v, int) for v in overrides.values())
                 and underlying in UNDERLYINGS
                 and MIN_DAYS <= days <= MAX_DAYS
-                and role in EXPIRY_ROLES
             ):
                 self.atm_overrides, self.underlying_key = overrides, underlying
-                self.days, self.expiry_role = days, role
+                self.days, self.expiry_role_of = days, roles
         except (OSError, ValueError, AttributeError, TypeError):
             pass  # first run or unreadable file: defaults
 
@@ -226,7 +240,7 @@ class Engine:
             "underlying": self.underlying_key,
             "atm": self.atm_overrides,
             "days": self.days,
-            "expiry": self.expiry_role,
+            "expiry": self.expiry_role_of,
         }
         try:
             CONFIG_FILE.write_text(json.dumps(config))
@@ -296,6 +310,7 @@ class Engine:
     def status_json(self) -> dict:
         return {
             "type": "status",
+            "underlying": self.underlying_key,  # requested: a switch shows before its charts
             "phase": self.phase,
             "message": self.message,
             "feed": {
@@ -313,7 +328,7 @@ class Engine:
             "status": self.status_json(),
             "config": {
                 "underlying": self.underlying_key,  # requested; may still be loading
-                "underlyings": list(UNDERLYINGS),
+                "underlyings": list(UNDERLYINGS),  # in menu order
                 "built": self.built_u.to_json(),  # what the charts below show
                 "atm": self.atm,
                 "atmAuto": self.atm_auto,
@@ -321,7 +336,7 @@ class Engine:
                 "indexOpen": self.index_open,
                 "days": self.days,
                 "expiry": self.expiry.isoformat() if self.expiry else None,
-                "expiryRole": self.expiry_role,
+                "expiryRole": self.expiry_role_of[self.built_u.key],
                 "expiryOptions": self.expiry_options,
                 "windowDates": [d.isoformat() for d in self.window_dates],
             },
@@ -362,8 +377,8 @@ class Engine:
         u = UNDERLYINGS[self.underlying_key]
         self._set_phase("loading", f"Loading {u.key} expiries...")
         try:
-            roles = expiry_roles(await self.gw.expiries(u), today)
-            expiry = roles.get(self.expiry_role, roles[DEFAULT_EXPIRY_ROLE])
+            roles = expiry_roles(await self.gw.expiries(u), today, weekly=u.weekly)
+            expiry = roles.get(self.expiry_role_of[u.key], roles[u.default_expiry_role])
 
             self._set_phase("loading", f"Loading {u.key} open...")
             quote = await self.gw.index_quote(u)

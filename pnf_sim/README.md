@@ -1,6 +1,6 @@
 # Straddle simulator
 
-Replays past NIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page (ATM - 200, ATM, ATM + 200 for NIFTY; ATM - 500, ATM, ATM + 500 for SENSEX), at 1X, 10X, 50X, 100X or 200X.
+Replays past NIFTY, BANKNIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page (ATM - 200, ATM, ATM + 200 for NIFTY; ATM - 500, ATM, ATM + 500 for BANKNIFTY and SENSEX), at 1X, 10X, 50X, 100X or 200X.
 
 It is a separate app, so the live page is never affected, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, SMA 10, signal detection, the chart renderer and the alerts.
 It needs only the consumer key from `.env` (market data), so it never asks for a TOTP.
@@ -18,8 +18,8 @@ To run the simulator on its own:
 
 ## Using it
 
-1. Pick **NIFTY** or **SENSEX** (Load waits until that index's expiries have loaded).
-2. Pick an **expiry**: the next four listed expiries (NIFTY: Tuesdays, SENSEX: Thursdays; the exchange moves an expiry for a holiday, e.g. 19 Oct 2026 is a Monday).
+1. Pick **NIFTY**, **BANKNIFTY** or **SENSEX** from the index menu (Load waits until that index's expiries have loaded).
+2. Pick an **expiry**: the next four listed expiries, or the next two monthlies for BANKNIFTY, which has no weeklies (NIFTY: Tuesdays, SENSEX: Thursdays, BANKNIFTY: the last Tuesday of the month; the exchange moves an expiry for a holiday, e.g. 19 Oct 2026 is a Monday).
 3. Pick **From** and **To** dates.
    Both must be before today, the range can be at most 30 days, and the start at most 5 years back.
 4. Optionally set an **ATM** strike; leave it empty to use the strike nearest to the start day's open.
@@ -53,7 +53,7 @@ To run the simulator on its own:
 
 Each chart has a trade bar at the bottom for practising a short straddle (selling the CE and PE together) during the replay.
 
-- **Sell 10 lots** sells the straddle at the price on screen, including the minute still forming (650 qty for NIFTY at 65 per lot, 200 qty for SENSEX at 20 per lot; the lot size comes from the exchange's contract list).
+- **Sell 10 lots** sells the straddle at the price on screen, including the minute still forming (650 qty for NIFTY at 65 per lot, 300 qty for BANKNIFTY at 30 per lot, 200 qty for SENSEX at 20 per lot; the lot size comes from the exchange's contract list).
   One trade at a time per chart: Sell is hidden while a trade is open.
 - **Exit 50%** buys back half of the open lots, rounded down to whole lots (10, 5, 3, 2, 1); it is disabled when only 1 lot is left.
 - **Exit Full** buys back all open lots and closes the trade; Sell then appears again.
@@ -66,7 +66,7 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
 
 ## Limits
 
-- **Only contracts still listed today can be replayed.** The API cannot fetch expired option contracts, so a past day is replayed with one of the next four listed expiries.
+- **Only contracts still listed today can be replayed.** The API cannot fetch expired option contracts, so a past day is replayed with one of the next listed expiries.
   A weekly contract usually has data for only the last two or three weeks before its expiry (it trades thinly when first listed); monthlies reach further back.
   If the chosen contract had not started trading on the chosen dates, the simulator says so.
 - At most 30 days per run (the history API's limit for 1-minute candles).

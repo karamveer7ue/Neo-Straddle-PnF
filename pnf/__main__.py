@@ -9,7 +9,7 @@ from .tls import ensure_cert
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="NIFTY straddle Point & Figure server")
+    parser = argparse.ArgumentParser(description="Index straddle Point & Figure server")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

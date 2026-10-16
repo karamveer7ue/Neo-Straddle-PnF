@@ -4,6 +4,7 @@ import pytest
 
 from pnf.series import (
     IST,
+    UNDERLYINGS,
     expiry_choices,
     expiry_roles,
     history_start,
@@ -53,6 +54,16 @@ def test_expiry_roles_pick_two_weeklies_and_two_monthlies():
         "27 Oct \u00b7 monthly",
         "23 Nov \u00b7 monthly",
     ]
+
+
+def test_without_weeklies_only_the_two_monthlies_are_offered():
+    # BANKNIFTY's real list on 2026-10-16: monthlies, then quarterlies.
+    listed = ["2026-10-27", "2026-11-23", "2026-12-29", "2027-03-30", "2027-06-29", "2027-09-28"]
+    roles = expiry_roles(listed, date(2026, 10, 16), weekly=False)
+    assert roles == {"month1": date(2026, 10, 27), "month2": date(2026, 11, 23)}
+    assert [c["label"] for c in expiry_choices(roles)] == ["27 Oct \u00b7 monthly", "23 Nov \u00b7 monthly"]
+    assert UNDERLYINGS["BANKNIFTY"].expiry_roles == ("month1", "month2")
+    assert UNDERLYINGS["NIFTY"].default_expiry_role == "week1"
 
 
 def test_expiry_shared_by_weekly_and_monthly_is_listed_once_as_monthly():

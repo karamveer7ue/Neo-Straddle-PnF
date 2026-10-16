@@ -13,7 +13,7 @@ import { LOTS_PER_SELL, ShortStraddleTrade } from './trades.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  underlyings: $('underlyings'),
+  underlying: $('underlying'),
   setup: $('setup'),
   expiry: $('expiry'),
   start: $('start'),
@@ -135,29 +135,27 @@ async function api(url, body) {
 // ---------------- Setup row ----------------
 
 function renderUnderlyings(keys = state.options?.underlyings ?? []) {
-  // The pressed button is the latest choice, even while its expiries are loading;
-  // Load waits for them, or it would load the previous index under the new button.
-  const chosen = state.pendingUnderlying ?? state.underlying;
   renderLoadButton();
-  els.underlyings.replaceChildren(...keys.map((key) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = key;
-    btn.setAttribute('aria-pressed', String(key === chosen));
-    btn.addEventListener('click', () => {
-      if (key === (state.pendingUnderlying ?? state.underlying)) return;
-      if (key === state.underlying) {
-        // Back to the index already loaded: cancel the pending switch.
-        optionsRequest += 1;
-        state.pendingUnderlying = null;
-        renderUnderlyings();
-        return;
-      }
-      loadOptions(key);
-    });
-    return btn;
-  }));
+  if (els.underlying.dataset.keys !== keys.join()) {
+    els.underlying.replaceChildren(...keys.map((key) => new Option(key, key)));
+    els.underlying.dataset.keys = keys.join();
+  }
+  // The latest choice, even while its expiries are loading; Load waits for them,
+  // or it would load the previous index under the new name.
+  els.underlying.value = state.pendingUnderlying ?? state.underlying;
 }
+
+els.underlying.addEventListener('change', () => {
+  const key = els.underlying.value;
+  if (key === state.underlying) {
+    // Back to the index already loaded: cancel the pending switch.
+    optionsRequest += 1;
+    state.pendingUnderlying = null;
+    renderUnderlyings();
+    return;
+  }
+  loadOptions(key);
+});
 
 function renderLoadButton() {
   els.load.disabled = state.loading || !!state.pendingUnderlying;

@@ -46,11 +46,20 @@ def test_dates_must_be_past_ordered_and_within_30_days():
 
 def test_offers_the_next_four_listed_expiries():
     listed = ["2026-11-03", "2026-10-13", "2026-10-06", "2026-10-19", "2026-10-27", "2026-11-09"]
-    assert offered_expiries(listed, TODAY) == [
+    assert offered_expiries(listed, TODAY, UNDERLYINGS["NIFTY"]) == [
         date(2026, 10, 13),
         date(2026, 10, 19),
         date(2026, 10, 27),
         date(2026, 11, 3),
+    ]
+
+
+def test_offers_only_the_next_two_monthlies_without_weeklies():
+    # BANKNIFTY's real list on 2026-10-16: monthlies, then quarterlies.
+    listed = ["2026-10-27", "2026-11-23", "2026-12-29", "2027-03-30", "2027-06-29", "2027-09-28"]
+    assert offered_expiries(listed, TODAY, UNDERLYINGS["BANKNIFTY"]) == [
+        date(2026, 10, 27),
+        date(2026, 11, 23),
     ]
 
 

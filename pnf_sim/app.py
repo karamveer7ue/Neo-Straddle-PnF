@@ -13,7 +13,6 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -21,11 +20,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from pnf.neo import NeoError, NeoGateway
-from pnf.series import UNDERLYINGS
+from pnf.series import DEFAULT_UNDERLYING, UNDERLYINGS, UnderlyingKey
 from pnf.static_files import RevalidatingStaticFiles
 
 from .replay import (
-    EXPIRIES_OFFERED,
     MAX_RANGE_DAYS,
     SimError,
     SimRequest,
@@ -66,7 +64,7 @@ app.mount("/sim", RevalidatingStaticFiles(directory=SIM_STATIC), name="sim")
 
 
 class SimulateBody(BaseModel):
-    underlying: Literal["NIFTY", "SENSEX"]
+    underlying: UnderlyingKey
     expiry: date
     start: date
     end: date
@@ -79,12 +77,12 @@ async def page():
 
 
 @app.get("/api/options")
-async def options(underlying: Literal["NIFTY", "SENSEX"] = "NIFTY"):
+async def options(underlying: UnderlyingKey = DEFAULT_UNDERLYING):
     """What the form can offer: the next listed expiries and the date limits."""
     u = UNDERLYINGS[underlying]
     today = today_ist()
     try:
-        expiries = offered_expiries(await app.state.gw.expiries(u), today)
+        expiries = offered_expiries(await app.state.gw.expiries(u), today, u)
     except NeoError as exc:
         raise HTTPException(status_code=502, detail=str(exc)[:300]) from exc
     start, end = default_dates(today)
@@ -97,7 +95,6 @@ async def options(underlying: Literal["NIFTY", "SENSEX"] = "NIFTY"):
         "defaultEnd": end.isoformat(),
         "maxRangeDays": MAX_RANGE_DAYS,
         "expiries": [e.isoformat() for e in expiries],
-        "expiriesOffered": EXPIRIES_OFFERED,
     }
 
 
@@ -116,7 +113,7 @@ async def simulate(body: SimulateBody):
             validate_dates(body.start, body.end, today)
             if body.atm is not None and body.atm % u.strike_step:
                 raise SimError(f"{u.key} ATM must be a multiple of {u.strike_step}.")
-            listed = offered_expiries(await app.state.gw.expiries(u), today)
+            listed = offered_expiries(await app.state.gw.expiries(u), today, u)
             if body.expiry not in listed:
                 raise SimError("Pick one of the listed expiries (expired contracts cannot be fetched).")
             task = app.state.building.get(key)  # another request may have started it meanwhile
