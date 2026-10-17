@@ -3,13 +3,14 @@
 Live Point & Figure charts for NIFTY, BANKNIFTY and SENSEX option straddles, built on the [Kotak Neo trade API](https://github.com/Kotak-Neo/kotak-neo-python).
 
 The screen shows three straddles of the chosen index side by side - ATM - 200, ATM and ATM + 200 for NIFTY (NSE), or ATM - 500, ATM and ATM + 500 for BANKNIFTY (NSE) and SENSEX (BSE) - each as a Point & Figure chart built from 1-minute closes with a 0.5% box and 3-box reversal.
-History comes from the Neo historical API, live prices stream over the Neo WebSocket, and every chart carries the intraday VWAP and a 10-column simple moving average (switch either on or off) plus double top buy / double bottom sell markers, with on-screen and audio alerts when a double bottom sell prints below VWAP.
+History comes from the Neo historical API, live prices stream over the Neo WebSocket, and every chart carries the intraday VWAP and a 10-column volume-weighted moving average, VWMA 10 (switch either on or off) plus double top buy / double bottom sell markers, with on-screen and audio alerts when a double bottom sell prints below VWAP.
 
 ![Three NIFTY straddle Point & Figure charts with VWAP and signal markers](docs/screenshot.png)
 
 Optionally, each chart can sell its straddle through a Zerodha Kite account, with live P&L and Exit 50% / Exit Full buttons for the positions taken (see [Trading through Kite](#trading-through-kite)).
+An algo can also trade the three straddles by itself, by fixed rules, with real orders or on paper (see [Algo trading](#algo-trading)).
 
-A separate [simulator](#simulator) replays past sessions on the same charts at 1X to 200X speed.
+A separate [simulator](#simulator) replays past sessions on the same charts at 1X to 200X speed, and can run the algo over them.
 
 ## Contents
 
@@ -21,6 +22,7 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - [Using the screen](#using-the-screen)
 - [Alerts](#alerts)
 - [Trading through Kite](#trading-through-kite)
+- [Algo trading](#algo-trading)
 - [Data and timing details](#data-and-timing-details)
 - [Simulator](#simulator)
 - [Development](#development)
@@ -41,8 +43,9 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - **Signals:** double top buy and double bottom sell are marked on the charts.
   A new double bottom sell with the straddle below its VWAP raises a toast, a panel flash, a chime and (when the tab is in the background) a system notification; double top buys, and sells at or above VWAP, are marked only.
 - **Trading through Kite (optional):** a quantity field and Sell button under each chart, live P&L for the positions taken, and Exit 50% / Exit Full on the charts holding one.
+- **Algo trading (optional):** sells a chart's straddle by itself on a double bottom sell below VWAP and VWMA 10, books half at a third of the target and the rest at the target, gets out on an X above VWAP or VWMA 10, and closes everything at a set time; a paper mode and the simulator let you try it first (see [Algo trading](#algo-trading)).
 - **Comfortable charts:** hover any box for its price and the time it printed, zoom in and out, scroll through history, light and dark themes.
-- **Simulator:** replay past sessions minute by minute at 1X, 10X, 50X, 100X or 200X, with the same charts, overlays and signals, and practise selling the straddles with live P&L (see [Simulator](#simulator)).
+- **Simulator:** replay past sessions minute by minute at 1X, 10X, 50X, 100X or 200X, with the same charts, overlays and signals, practise selling the straddles with live P&L, and watch the algo trade past days (see [Simulator](#simulator)).
 
 ## How it works
 
@@ -126,6 +129,7 @@ Kotak Neo WebSocket feed ──(live option prices, the index)─────┘
 
 The server does the data work: picking strikes and expiry, loading and pacing history requests, logging in, turning live ticks into 1-minute bars, and pushing everything to the browser.
 The browser builds the Point & Figure charts, detects signals and raises the alerts.
+The [algo](#algo-trading) runs in the server with its own copy of the Point & Figure rules (`pnf/pnf.py`, checked against the browser's by the tests), so it trades the charts exactly as the page draws them.
 
 ## Requirements
 
@@ -262,6 +266,7 @@ Loading takes about 10 to 15 seconds, because history requests are spaced out to
 | **View > Days** | How many trading sessions of history to show (1 to 15). |
 | **Bell** | Turns alert sounds on or off (remembered by the browser). |
 | **Alert log** | Opens the last 30 alerts and errors; the badge counts new ones. |
+| **Algo** | Shows whether the algo is **Off**, on **Paper** or **Live**, and switches it On or Off; its menu holds the algo's settings (see [Algo trading](#algo-trading)). |
 | **Status pill** | **History only**, **Connecting**, **Reconnecting** or **Live**. |
 
 Inside each panel:
@@ -296,6 +301,7 @@ Each alert gives you:
 
 **Alert log:** the list button next to the bell opens the last 30 alerts, newest first, with the index, chart, strike, expiry, the level broken, the breakout price and the bar time.
 Errors shown on the page (for example a Kite order not placed or rejected) are saved there too, marked with an amber **!**, with the straddle, the reason and the time.
+So are the algo's actions and alarms (see [What the page shows](#what-the-page-shows)).
 A red badge on the button counts alerts you have not seen yet; opening the log clears it.
 The log is kept by the server in `.pnf-alerts.json` (gitignored), so it survives page reloads and server restarts, and an alert seen by several open tabs is logged once.
 Alerts are detected in the browser, so they are only logged while at least one page is open.
@@ -310,9 +316,140 @@ With a Zerodha Kite Connect app's key and secret in `.env`, the page can place o
 - **Under each chart:** enter a quantity (in units, a multiple of the lot size) and press **Sell**; the chart's CE and PE are sold at market at once, with no confirmation.
 - **On charts holding a position:** its live P&L and **Exit 50%** / **Exit Full**; charts without a position have no exit buttons.
 - **Under the top bar:** every straddle traded from the page with its quantity, sold-at and current straddle price, P&L, and the total.
-- **Top bar:** **Connect Kite** to log in (once a day), then **Kite AB1234**.
+- **Top bar:** **Connect Kite** to log in (once a day), then **TradeOn**.
 
 Setup (Kite Connect app, redirect URL, static IP registration), how orders are sized and placed, and how positions are tracked are described in [kite/README.md](kite/README.md).
+
+## Algo trading
+
+The algo trades the three charts' straddles by itself, by fixed rules.
+It sells a straddle on a double bottom sell below VWAP and VWMA 10, books half the profit at a third of the target and the rest at the full target, and gets out on an X above the lower of VWAP and VWMA 10.
+It places its orders through the same Kite connection as the Sell buttons (see [Trading through Kite](#trading-through-kite)), or trades on paper only.
+
+It runs in the server, not in the page.
+It therefore keeps working while the page is closed or in a background tab, acts only once however many tabs are open, and picks up its open trades again after a restart.
+Keep the page open in a tab anyway: that is where its sounds and pop-up alerts play.
+
+### The Algo menu
+
+The **Algo** button in the top bar shows **Off**, **On · Paper** or **On · Live**, and **Off · managing 1** while it still manages a trade it is no longer taking new ones for (after a restart, for example).
+Clicking it switches the algo On or Off; the arrow next to it opens the Algo menu.
+The menu holds the settings below, today's algo trades with their P&L (an open one with its own **Exit** button), and an **Exit all algo trades** button that buys back every open algo trade at market at once and switches the algo Off.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| **Mode** | Paper | **Paper** records the trades the algo would make, at the chart's prices, without placing any order; **Live** places real orders through Kite. It can be changed only while the algo is Off and manages no trade. |
+| **Quantity** | NIFTY 1690, BANKNIFTY 720, SENSEX 480 | Units of the CE and of the PE sold per trade, set for each index: whole lots, at least 2 lots (so a trade can be halved), and at most twice the default (see [Size cap](#size-cap)). |
+| **Target Points** | NIFTY 30, BANKNIFTY 99, SENSEX 90 | Straddle points (CE + PE) at which the whole trade is booked; half is booked at a third of them. |
+| **Simultaneous Trades** | 1 | The most algo trades open at once across the three charts (1 to 3); one chart never has more than one. |
+| **Last entry** | 14:45 | No new trades after this time; open trades are still managed. |
+| **Exit Time** | 15:12 | Every open algo trade is bought back at this time, in profit or in loss, and the algo switches Off for the day (at the latest 15:25, before Zerodha's 15:26 square-off). |
+| **Max loss per trade** | ₹1,00,000 | A trade that has lost this much is bought back at once. |
+| **Daily loss limit** | ₹1,00,000 | When the day's algo trades have lost this much in all, every open algo trade is bought back and the algo switches Off for the day. |
+| **Max trades per day** | 5 | No new trades after this many in a day. |
+
+Quantity and Target Points are set for the index on screen; the rest apply to every index.
+A setting is saved as soon as you leave its field or press Enter (Esc undoes the edit), and a value that cannot be used is refused with the reason under the field.
+Quantity, Target Points and Max loss per trade are fixed for a trade when it opens, so changing them affects only new trades; the other settings apply at once.
+At the defaults a trade is 26 lots of NIFTY (65 each), 24 lots of BANKNIFTY (30 each) or 24 lots of SENSEX (20 each), about half of what one order may carry on each exchange.
+
+### Entry
+
+At every 1-minute close, the algo sells a chart's straddle when all of these hold:
+
+1. That close confirms a double bottom sell: an O column falls one box below the previous O column's bottom.
+2. The close is below VWAP and below VWMA 10.
+3. That chart has no open algo trade, and fewer algo trades are open than **Simultaneous Trades** allows.
+4. Fewer than **Max trades per day** trades were opened today, the daily loss limit has not been hit, and it is **Last entry** or earlier.
+5. No position of your own (from a Sell button or the Kite app) is open on that straddle (checked whenever Kite is connected, in Paper mode too).
+
+In Live mode it sells the CE and then straight away the PE, at market, as MIS, the index's **Quantity** of each, with the trade's own tag on both orders in Kite (`pnfalgo001` for the day's first trade, and so on).
+In Paper mode the trade is recorded at that close.
+When more charts qualify in the same minute than there are free slots, the ATM chart goes first, then the lower strike, then the higher.
+The trade's entry price is the straddle price actually sold at: the CE's average fill plus the PE's.
+
+### Exits
+
+| Rule | When | Then |
+| --- | --- | --- |
+| **Stop** | At a 1-minute close, the newest column is X and its highest X box is above the lower of VWAP and VWMA 10 | Buy back everything |
+| **First target** | A 1-minute close at or below the entry price minus a third of **Target Points** | Buy back half, and add a breakeven stop at the entry price for the rest |
+| **Breakeven** | After the first target, a 1-minute close at or above the entry price | Buy back the rest |
+| **Full target** | A 1-minute close at or below the entry price minus **Target Points** | Buy back the rest |
+| **Max loss** | The trade's loss (booked and open, at the live price) reaches **Max loss per trade** | Buy back everything at once |
+| **Daily loss limit** | The day's algo loss (booked and open, at live prices) reaches **Daily loss limit** | Buy back every algo trade; the algo switches Off for the day |
+| **Exit Time** | The clock reaches **Exit Time** | Buy back everything; the algo switches Off for the day |
+
+- **Whichever comes first:** after the first target, the stop keeps working next to the breakeven stop, so the rest goes on the first of the two.
+- **Prices:** a close is the chart's 1-minute close (CE + PE), the price the chart is built from.
+  VWAP and VWMA 10 are taken at the newest column, as the chart draws them, and move every minute.
+- **Odd lots:** half of an odd number of lots is rounded up at the first target (25 lots: 13, then 12).
+
+Example: NIFTY 1690 (26 lots) sold at 180.00, with VWAP at 186.00 and VWMA 10 at 184.20.
+
+- An X box above the lower of the two lines (184.20 at first) buys back all 1690.
+- A close at 170.00 or below buys back 845 (13 lots); from then on, a close at 180.00 or above buys back the other 845.
+- A close at 150.00 or below buys back the last 845.
+- A live price of 239.17 (a loss of ₹1,00,000 on 1690) buys back everything at once.
+- At 15:12, whatever is still open is bought back.
+
+### Switching it On and Off
+
+- **On:** needs today's charts (rebuilt at 09:16 from the day's open), the live feed (the TOTP login) and, in Live mode, Kite connected.
+  Before it starts, the button shows what will be traded (index, expiry, the three strikes, quantity, target and mode) for you to confirm.
+- **What it trades:** the index, expiry and strikes on screen.
+  While the algo is On or managing a trade, the index, expiry, ATM and Days controls are locked, so the charts keep showing the straddles it trades.
+  Should the charts change anyway, it takes no new trades until you switch it On again.
+- **Off:** stops everything.
+  Open algo trades are left to you, with no targets or stops, not even the Exit Time; if any are open, the button asks before switching Off.
+- **Every day starts Off:** after the Exit Time the algo switches itself Off; switch it On again the next day once the charts, the live feed and Kite are ready.
+- **After a restart:** the algo is Off, so it opens no new trades, but it goes on managing a trade that was open (targets, stops and the Exit Time) until that trade closes.
+
+### When something goes wrong
+
+- **An entry leg fails** (for example Kite rejects the PE for lack of margin, or a leg does not fill within 10 seconds): the leg already sold is bought back at once and you get an alert.
+  The algo then takes no new trades until you switch it On again, since the cause needs you; any other open algo trade is still managed.
+- **An exit order that Kite leaves unfilled** for 10 seconds (for example beyond Kite's market-protection band) is cancelled and sent again.
+  Every buy-back is sized again from Kite's positions at that moment and never exceeds what Kite shows short, so a short position can never turn long, however often an exit is retried.
+- **An exit Kite rejects** is sent again after 5 seconds, then 10, 20 and so on, up to a minute apart, with Kite's reason in the alarm; pressing **Exit** sends it again at once.
+- **An order whose reply is lost** (a timeout): the algo looks for it in Kite's order book by its tag, and counts it as not placed if Kite has not listed it after 15 seconds.
+  Should Kite list it later after all, the algo still takes it in and buys back what it left short.
+- **A crash or restart while orders are on their way:** the algo saves each order before sending it, and every order with a trade's tag in Kite's order book counts as that trade's.
+  After the restart it finds the orders that went through; a leg Kite never received counts as not placed, which fails the entry and buys the other leg back.
+- **The live feed drops, Kite disconnects, or an exit does not go through while an algo trade is open:** a bar under the top bar says what is wrong, and a sound and an alert repeat every 10 seconds until it is fixed.
+  Nothing is bought back because of it (no target or stop can fire without live prices), but the Exit Time still applies.
+  A feed connection that dies without a word (the network gone, say) is noticed too: in session, 30 seconds without a packet count as a drop, and the feed reconnects rather than showing stale prices as live.
+- **The internet goes down:** the feed and Kite both drop, with the alarms above; the feed reconnects by itself and Kite's polling resumes when the connection is back, and any exit owed meanwhile (the Exit Time, say) is sent then.
+  A trade Zerodha squared off at 15:26 during the outage is recognised from its order book afterwards.
+- **The server crashes or is restarted:** its state (settings, today's trades and their orders) is saved to `.pnf-algo.json` as it changes, and written whole or not at all.
+  Back up, the algo is Off for new trades, finds its orders in Kite's order book (also the ones whose reply the crash cut off), and goes on managing an open trade once you have entered the TOTP (it alarms until then, and Kite must be connected).
+- **Two servers at once** (an old one left running on another port, say): only the first holds the `.pnf-algo.lock` file, and the other's algo stays off and says so.
+- **A setting that would act at once:** an Exit Time already past is refused while the algo is On or managing a trade, since it would buy everything back that instant; use **Exit all algo trades** for that.
+- **You close an algo trade yourself** (with the Exit buttons under the chart or on its card, or in the Kite app): the algo notices from Kite's positions and the order that did it, manages only what is left, and stops once nothing is.
+  If Kite's positions show less short than the algo holds and no order explains it, the algo changes nothing and raises an alarm instead.
+- **A position from the algo's orders that no open algo trade holds** (for example after its saved state was lost), or a leg bought back past zero: an alarm names the contract, for you to check in Kite.
+- **A live trade still open at midnight** (the app could not exit it): Zerodha squared it off at 15:26, so the algo lets it go, with an alert to check Kite's positions.
+- **Zerodha's backstop:** algo trades use the MIS product, so if the app cannot exit at all (a crash, the Mac asleep, no connection), Zerodha squares them off at 15:26, charging ₹50 + GST per order.
+  The Sell buttons keep using NRML.
+
+### Size cap
+
+Every sell from this app, by the algo or with a Sell button, is capped at twice the algo's default quantity: NIFTY 3,380, BANKNIFTY 1,440 and SENSEX 960 units.
+This replaces the earlier `KITE_MAX_LOTS` setting (20 lots).
+
+### Practising first
+
+- **Paper mode** runs the same rules on the live market and records each trade at the chart's prices, without placing orders; slippage and charges are left out.
+- **The simulator** replays past days with the same algo (see [The algo in the simulator](#the-algo-in-the-simulator)).
+
+### What the page shows
+
+- **A line on each chart** (under its header): **Algo paper** or **Algo live**, then what the algo does there: watching for a double bottom sell, the open trade (quantity, entry, its stop and targets) with its live P&L and an **Exit** button that buys it back at market at once, or the last trade's result.
+- **Marks on the chart** for an open trade: dashed lines at its **Stop** (red) and its entry (**Sold**, grey; it becomes the red **BE** breakeven stop once half is booked), dotted green lines at **T1** and **T2**, each with its price on the axis.
+  A red triangle pointing down marks where a trade sold, a green one pointing up where it bought back.
+- **Toasts and sounds:** a trade opening (two falling notes), part of it booked (two rising notes), a trade closed (three notes), and the alarms.
+- **The alert log** keeps every algo action and alarm and, while the algo is On, every double bottom sell that raised an alert but was not traded, with the reason (for example not below VWMA 10, no free slot, or after Last entry).
+- Every 5 minutes the charts replace their live-built minutes with the exchange's official candles (see [Data and timing details](#data-and-timing-details)), which can move a box afterwards; the algo's decisions stay as they were made.
 
 ## Data and timing details
 
@@ -322,7 +459,7 @@ Setup (Kite Connect app, redirect URL, static IP registration), how orders are s
 - **Refreshing:** every 5 minutes during the session (and once at 15:36), today's official candles are fetched again and replace the live-built bars they cover.
 - **Daily rollover:** at 09:16 on each trading day the charts rebuild with the new day's ATM, expiry and history window.
 - **Holidays:** a weekday whose candles load fine but come back empty after 09:30 is treated as a market holiday and left out of the window.
-- **Saved settings:** the index on screen, each index's ATM override and expiry choice, and the day count are stored in `.pnf-config.json` (gitignored); the alert log in `.pnf-alerts.json`.
+- **Saved settings:** the index on screen, each index's ATM override and expiry choice, and the day count are stored in `.pnf-config.json` (gitignored); the alert log in `.pnf-alerts.json`; the algo's settings and today's algo trades in `.pnf-algo.json`.
 
 ## Simulator
 
@@ -330,7 +467,7 @@ The simulator replays past NIFTY, BANKNIFTY or SENSEX sessions minute by minute 
 
 ![The straddle simulator replaying a NIFTY session at 50X, mid-afternoon](docs/simulator.png)
 
-It is a separate app (`pnf_sim/`), so it never interferes with the live page, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, VWMA 10, signal detection, the chart renderer and the alerts.
+It is a separate app (`pnf_sim/`), so it never interferes with the live page, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, VWMA 10, signal detection, the chart renderer, the alerts and the algo.
 It reads only market data, so it needs just the consumer key from `.env` and never asks for a TOTP.
 
 ### Running the simulator
@@ -372,6 +509,7 @@ Setup is the same as for the live app (see [Setup](#setup)); only `CONSUMER_KEY`
 | **Timeline** | Drag to jump to any minute; the left and right arrow keys step exactly one minute (also while the timeline has focus). The thin bar under it shows the time left until the current minute completes. |
 | **Clock** | The simulated time, to the second, and the minute count (for example, "minute 296 of 375"). |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
+| **Algo** | Runs the live page's algo over the replay, on paper (see [The algo in the simulator](#the-algo-in-the-simulator)). |
 | **View (VWAP / VWMA 10, box size), bell, expand** | The same as on the live page; the simulator remembers its own VWAP/VWMA choice. |
 
 Speeds:
@@ -425,6 +563,24 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
 - Going back along the timeline clears the simulated trades opened (or exited) after the point you go back to, since they have not happened yet; earlier trades and moving forward keep them, and loading a new run starts afresh.
   Signals after that point alert again when they are replayed.
 
+### The algo in the simulator
+
+The **Algo** button in the playbar runs the [algo](#algo-trading) over the replay with the live page's rules, on paper only.
+Its menu is the live page's, without the Mode choice and the Exit buttons.
+
+- **Switching it On:** load a run, then press **Algo**; it trades from the moment on the timeline (from the start of the run at "minute 0"), with no confirmation.
+- **Each session:** it switches itself On again at every later session's open, since nobody is there to do it, and goes Off at the Exit Time, after the daily loss limit or once Last entry has passed, as on the live page.
+- **Prices:** it trades at the minute closes the charts are built from; Max loss per trade and the Daily loss limit also watch the four price steps within each minute.
+  Slippage and charges are left out.
+- **What you see:** the line under each chart's header, the lines and triangles on the charts, the day's trades in the Algo menu, and a toast for each algo action (with a sound for a trade opened, booked or closed) while the replay plays.
+- **The timeline:** dragging it shows the algo's trades as they stood at that moment, without toasts; a trade after that moment is gone until the replay reaches it again.
+- **Settings:** the simulator keeps its own, in the browser, apart from the live page's; Quantity and Target Points are those of the run's index.
+  Changing a setting while the algo is On works the run's trades out again with it.
+- **Off** takes the algo's trades off the replay; switched On again, it starts afresh from that moment.
+  Loading a new run with the algo On replays the algo from that run's start.
+- **At the end,** the "Replay finished" banner adds the algo's result, for example "Algo: 3 trades, 2 won, 1 lost, +₹12,480."
+- The algo's trades and the trade bars under the charts (Sell 10 lots, Exit 50%, Exit Full) are separate: neither sees the other.
+
 ### Which dates can be replayed
 
 - **Only contracts still listed today.** The API cannot fetch option contracts that have expired, so a past day is replayed with one of the next listed expiries, not with the contract that was nearest on that day.
@@ -439,9 +595,9 @@ The simulator's own [README](pnf_sim/README.md) has the same details next to its
 ## Development
 
 ```sh
-.venv/bin/python -m pytest                     # Python tests (live app and simulator)
+.venv/bin/python -m pytest                     # Python tests (live app, simulator and algo)
 .venv/bin/python -m pytest tests/test_engine.py::test_live_minute_bars_and_reconcile   # one test
-node --test tests/*.test.mjs                   # P&F engine, simulator playback and Kite P&L tests
+node --test tests/*.test.mjs                   # P&F engine, simulator playback, Kite P&L and algo page tests
 .venv/bin/ruff check && .venv/bin/ruff format --check
 ```
 
@@ -454,18 +610,25 @@ node --test tests/*.test.mjs                   # P&F engine, simulator playback 
 | `pnf/engine.py` | The state machine: building charts, the live feed, minute bars, refreshing, daily rollover. |
 | `pnf/tls.py` | The HTTPS certificate both servers use: created in `certs/` on first start, renewed before it expires. |
 | `pnf/app.py` | FastAPI server: the page, `POST /api/login`, `POST /api/config`, and the `/ws` update channel. |
-| `pnf/static/pnf.js` | Point & Figure construction and signal detection (the only P&F code). |
+| `pnf/static/pnf.js` | Point & Figure construction and signal detection for the page. |
+| `pnf/pnf.py` | The same Point & Figure rules in Python, for the algo; the tests check that both give the same charts. |
 | `pnf/static/chart.js` | Canvas chart renderer (draws only the visible area, so long histories stay fast). |
 | `pnf/static/axis.js` | Price-axis tag layout, so the price, VWAP and VWMA tags never overlap. |
 | `pnf/static/alerts.js` | Toasts, sounds and system notifications. |
 | `pnf/static/expand.js` | The expand button that widens one chart over the other two (live page and simulator). |
 | `pnf/static/app.js` | Page wiring: controls, server messages, panel headers. |
-| `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits) and `POST /api/simulate` (builds a run); serves the live app's static files read-only. |
+| `pnf_sim/app.py` | Simulator server: its page, `GET /api/options` (expiries and date limits), `POST /api/simulate` (builds a run) and `POST /api/algo` (the algo's trades over a run); serves the live app's static files read-only. |
 | `pnf_sim/replay.py` | Builds a simulator run: date checks, expiries offered, strikes from the start day's open, straddle series with each minute's price path, previous closes for the spot. |
 | `kite/` | Order placement and position tracking through Zerodha Kite: gateway, contracts, exit sizing, broker, endpoints and the trading UI (see [kite/README.md](kite/README.md#files)). |
+| `algo/core.py` | The algo's rules and bookkeeping, with no I/O: entries, exits, loss limits, Exit Time, settings. |
+| `algo/live.py` | Carries out live algo trades through Kite: places, follows, cancels and resends orders. |
+| `algo/runner.py` | Runs the algo in the live server: engine and Kite hooks, paper fills, alarms, saving `.pnf-algo.json`, pushing its state. |
+| `algo/web.py` | The algo's endpoints (`/algo/...`) and its `/algo/ws` update channel. |
+| `algo/sim.py` | Works out the algo's trades over a simulator run. |
+| `algo/static/` | The Algo button and menu, chart lines and marks, alarms and confirmations (`ui.js`, shared with the simulator), the live page's link to the server (`algo.js`), and the state's words and numbers (`model.js`). |
 | `start.sh` | Starts the live app and the simulator together (see [Running](#running)). |
-| `pnf_sim/static/` | The simulator page (`simulator.html`, `simulator.js`, `sim.css`), its replay clock (`player.js`) and its simulated trades (`trades.js`). |
-| `tests/` | Python tests (the live engine against a fake gateway, the simulator's run building, and Kite trading against a fake Kite in `tests/kite_fakes.py`) and JavaScript tests (the P&F engine, the simulator's replay clock, and Kite P&L). |
+| `pnf_sim/static/` | The simulator page (`simulator.html`, `simulator.js`, `sim.css`), its replay clock (`player.js`), its simulated trades (`trades.js`) and the algo over the replay (`algo-sim.js`). |
+| `tests/` | Python tests (the live engine against a fake gateway, the simulator's run building, Kite trading against a fake Kite in `tests/kite_fakes.py`, the algo's rules, its live runner and its simulator runs, and the Python P&F against the browser's) and JavaScript tests (the P&F engine, the simulator's replay clock, Kite P&L and the algo's page model). |
 
 ### Testing the live path outside market hours
 
@@ -478,12 +641,13 @@ node --test tests/*.test.mjs                   # P&F engine, simulator playback 
 - Credentials are read from `.env` and are never sent to the browser.
 - The TOTP is used once to log in and is not stored.
 - The Neo session is used only for market data.
-- Orders are placed only through Kite, and only from the page's Sell and Exit buttons; the Kite access token stays on the server (owner-only `.kite-session.json`), and the order endpoints refuse requests from any other website (see [kite/README.md](kite/README.md#security)).
+- Orders are placed only through Kite: from the page's Sell and Exit buttons, and by the algo in Live mode; the Kite access token stays on the server (owner-only `.kite-session.json`), and the order endpoints refuse requests from any other website (see [kite/README.md](kite/README.md#security)).
 
 ## Limitations
 
 - NIFTY, BANKNIFTY and SENSEX only, with fixed side-strike distances (± 200, ± 500 and ± 500).
-- Box size (0.5%), reversal (3 boxes) and the VWMA period (10 columns) are fixed in the code (`pnf/static/pnf.js`).
+- Box size (0.5%), reversal (3 boxes) and the VWMA period (10 columns) are fixed in the code (`pnf/static/pnf.js`, and `pnf/pnf.py` for the algo).
 - Alerts work only while the page is open in a browser tab.
+  The algo trades without the page, but its sounds and pop-up alerts also need the page open.
 - This is a charting tool, not investment advice.
   Check signals against your own analysis before trading.

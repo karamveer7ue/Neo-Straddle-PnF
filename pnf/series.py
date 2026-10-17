@@ -28,7 +28,15 @@ class Underlying:
     strike_step: int
     side_offset: int  # the side charts sit at ATM - offset and ATM + offset
     max_order_qty: int  # the exchange's freeze quantity: the most one option order may carry
+    algo_qty: int  # the algo's default quantity per trade (units of the CE and of the PE)
+    algo_target: int  # the algo's default Target Points (straddle points)
     weekly: bool = True  # lists weekly expiries; BANKNIFTY has monthlies only
+
+    @property
+    def max_sell_qty(self) -> int:
+        """The most one sell from this app may carry (the algo or a Sell button): twice
+        the algo's default quantity, as a guard against a mistyped quantity."""
+        return 2 * self.algo_qty
 
     @property
     def expiry_roles(self) -> tuple[str, ...]:
@@ -50,10 +58,20 @@ class Underlying:
 
 # NIFTY and BANKNIFTY trade on NSE; SENSEX on BSE. Index tokens are names, not numbers.
 # The order is the index menu's. max_order_qty is one below the scrip master's
-# lFreezeQty on NSE (an order must stay under it) and equal to it on BSE.
+# lFreezeQty on NSE (an order must stay under it) and equal to it on BSE (NSE's
+# limits as revised on 5 Oct 2026). The algo defaults are the user's: about half of
+# each exchange limit (NIFTY 26 lots of 65, BANKNIFTY 24 of 30, SENSEX 24 of 20).
 UNDERLYINGS = {
     "NIFTY": Underlying(
-        "NIFTY", "nse_fo", "nse_cm", "Nifty 50", strike_step=50, side_offset=200, max_order_qty=3510
+        "NIFTY",
+        "nse_fo",
+        "nse_cm",
+        "Nifty 50",
+        strike_step=50,
+        side_offset=200,
+        max_order_qty=3510,
+        algo_qty=1690,
+        algo_target=30,
     ),
     "BANKNIFTY": Underlying(
         "BANKNIFTY",
@@ -63,10 +81,20 @@ UNDERLYINGS = {
         strike_step=100,
         side_offset=500,
         max_order_qty=1440,
+        algo_qty=720,
+        algo_target=99,
         weekly=False,
     ),
     "SENSEX": Underlying(
-        "SENSEX", "bse_fo", "bse_cm", "SENSEX", strike_step=100, side_offset=500, max_order_qty=1000
+        "SENSEX",
+        "bse_fo",
+        "bse_cm",
+        "SENSEX",
+        strike_step=100,
+        side_offset=500,
+        max_order_qty=1000,
+        algo_qty=480,
+        algo_target=90,
     ),
 }
 DEFAULT_UNDERLYING = "NIFTY"

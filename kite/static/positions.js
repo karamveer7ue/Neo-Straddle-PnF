@@ -60,14 +60,15 @@ export function summarize(group, priceOf = () => null) {
 
 /**
  * Check a quantity typed for a sell.
+ * @param {number|null} maxQty the most one sell may carry: twice the algo's default quantity
  * @returns {{ok: boolean, lots?: number, error?: string}}
  */
-export function checkQuantity(quantity, lotSize, maxLots) {
+export function checkQuantity(quantity, lotSize, maxQty) {
   if (!lotSize) return { ok: false, error: 'Lot size unknown until Kite is connected' };
   if (!Number.isInteger(quantity) || quantity <= 0) return { ok: false, error: 'Enter a quantity' };
   if (quantity % lotSize) return { ok: false, error: `Must be a multiple of the lot size, ${lotSize}` };
   const lots = quantity / lotSize;
-  if (maxLots && lots > maxLots) return { ok: false, lots, error: `Above the ${maxLots}-lot limit (KITE_MAX_LOTS)` };
+  if (maxQty && quantity > maxQty) return { ok: false, lots, error: `Above the ${fmtQty(maxQty)} limit (twice the algo default)` };
   return { ok: true, lots };
 }
 

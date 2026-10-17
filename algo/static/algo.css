@@ -1,0 +1,399 @@
+/* The algo on the page (see ui.js). Uses the page's tokens from /static/style.css. */
+
+/* ---------------- Top bar: the Algo button and its menu ---------------- */
+
+.algo-menu { position: relative; }
+
+.algo-control {
+  --tint: var(--text-3);
+  display: flex;
+  height: 30px;
+  border-radius: 6px;
+}
+
+.algo-control[data-state="paper"] { --tint: var(--accent); }
+.algo-control[data-state="live"] { --tint: var(--up); }
+.algo-control[data-state="managing"] { --tint: var(--warn); }
+
+.algo-toggle, .algo-caret {
+  height: 30px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.algo-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 9px;
+  border-radius: 6px 0 0 6px;
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.algo-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  margin-left: -1px;
+  padding: 0;
+  border-radius: 0 6px 6px 0;
+  color: var(--text-3);
+}
+
+.algo-toggle:hover, .algo-caret:hover { border-color: var(--text-3); color: var(--text-1); }
+.algo-toggle:disabled { cursor: default; opacity: 0.6; }
+.algo-caret[aria-expanded="true"] { border-color: var(--accent); color: var(--text-1); }
+.algo-caret svg { transition: transform 0.15s; }
+.algo-caret[aria-expanded="true"] svg { transform: rotate(180deg); }
+
+.algo-name { color: var(--text-1); font-weight: 650; }
+
+.algo-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tint);
+}
+
+/* On, or managing trades: the button takes the state's colour. */
+.algo-control:not([data-state="off"]) .algo-toggle,
+.algo-control:not([data-state="off"]) .algo-caret {
+  border-color: color-mix(in srgb, var(--tint) 55%, var(--border));
+  background: color-mix(in srgb, var(--tint) 12%, var(--surface-2));
+}
+.algo-control:not([data-state="off"]) .algo-state { color: var(--tint); font-weight: 650; }
+.algo-control[data-state="paper"] .algo-dot,
+.algo-control[data-state="live"] .algo-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--tint) 25%, transparent); }
+.algo-control.busy .algo-toggle { cursor: progress; }
+
+/* An alarm: a red ring that pulses until it is dealt with. */
+@keyframes algo-alarm {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--down) 60%, transparent); }
+}
+.algo-control.alarm { animation: algo-alarm 1.2s ease-in-out infinite; }
+.algo-control.alarm .algo-toggle, .algo-control.alarm .algo-caret { border-color: var(--down); }
+
+/* ---------------- The menu ---------------- */
+
+.algo-panel {
+  width: 360px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  gap: 0;
+  padding: 0;
+}
+
+.ap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 6px;
+}
+
+.ap-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.ap-mode button { height: 24px; padding: 0 12px; }
+.ap-mode button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.ap-status {
+  margin: 0;
+  padding: 0 14px 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  border-bottom: 1px solid var(--border);
+}
+.ap-status.problem { color: var(--warn); }
+
+.ap-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ap-section {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 2px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ap-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label box" "hint box";
+  align-items: center;
+  column-gap: 12px;
+}
+
+.ap-label { grid-area: label; font-size: 12.5px; font-weight: 550; }
+
+.ap-hint {
+  grid-area: hint;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ap-box {
+  grid-area: box;
+  display: flex;
+  align-items: center;
+  width: 100px; /* every box the same: their right and left edges line up */
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.ap-box i { padding-left: 8px; color: var(--text-3); font-style: normal; font-size: 12px; }
+.ap-box:focus-within { border-color: var(--accent); }
+
+.ap-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+.ap-box.rupees .ap-input { padding-left: 4px; }
+
+.ap-select {
+  width: 100%;
+  height: 28px;
+  padding: 0 4px 0 8px;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  outline: none;
+  cursor: pointer;
+}
+
+.ap-field.invalid .ap-box { border-color: var(--down); }
+.ap-field.invalid .ap-hint { color: var(--down); white-space: normal; }
+
+/* Today's trades */
+.ap-today { padding: 10px 14px 12px; }
+.ap-day-pnl { margin-left: auto; font-family: var(--font-mono); font-size: 12px; letter-spacing: 0; text-transform: none; }
+.ap-day-pnl.up, .ap-pnl.up, .ar-pnl.up { color: var(--up); }
+.ap-day-pnl.down, .ap-pnl.down, .ar-pnl.down { color: var(--down); }
+
+.ap-trades { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 0; padding: 0; list-style: none; }
+
+.ap-trade {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 7px;
+}
+.ap-trade.active { border-left-color: var(--o); }
+.ap-trade[data-state="failed"] { border-left-color: var(--warn); }
+
+.ap-trade-head { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.ap-trade-head time { color: var(--text-3); font-family: var(--font-mono); font-size: 11.5px; }
+.ap-trade-head b { font-size: 12.5px; font-weight: 650; white-space: nowrap; }
+
+.ap-badge {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.ap-pnl { margin-left: auto; font-family: var(--font-mono); font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+.ap-trade-what, .ap-trade-levels {
+  grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ap-trade-what { color: var(--text-1); }
+.ap-trade-levels { color: var(--text-3); }
+
+.ap-exit { grid-column: 2; grid-row: 2 / span 2; align-self: end; height: 24px; padding: 0 9px; font-size: 12px; font-weight: 600; }
+
+.ap-empty { margin: 4px 0 0; color: var(--text-3); font-size: 12px; }
+
+.ap-foot { padding: 0 14px 14px; }
+
+.ap-exit-all {
+  width: 100%;
+  border-color: color-mix(in srgb, var(--down) 55%, var(--border));
+  color: var(--down);
+  font-weight: 650;
+}
+.ap-exit-all:hover:not(:disabled) { border-color: var(--down); background: color-mix(in srgb, var(--down) 8%, var(--surface-2)); }
+
+/* ---------------- On each chart: the algo's line ---------------- */
+
+.algo-row {
+  --tint: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--tint) 7%, var(--surface));
+  font-size: 12px;
+}
+
+.algo-row[data-mode="live"] { --tint: var(--up); }
+.algo-row[data-kind="open"] { background: color-mix(in srgb, var(--o) 8%, var(--surface)); }
+.algo-row[data-kind="yours"], .algo-row[data-kind="failed"] { --tint: var(--warn); }
+.algo-row[data-kind="closed"], .algo-row[data-kind="watching"] { background: var(--surface); }
+
+.ar-badge {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tint) 16%, transparent);
+  color: var(--tint);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.ar-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.ar-what { font-weight: 600; }
+.ar-levels { margin-left: 8px; color: var(--text-3); }
+.algo-row[data-kind="closed"] .ar-what, .algo-row[data-kind="watching"] .ar-what { color: var(--text-2); font-weight: 550; }
+
+.ar-pnl { flex: none; font-family: var(--font-mono); font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.ar-exit { flex: none; height: 24px; padding: 0 10px; font-size: 12px; font-weight: 600; }
+
+/* ---------------- Alarms ---------------- */
+
+.algo-alarm {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 16px;
+  background: color-mix(in srgb, var(--down) 16%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--down) 45%, var(--border));
+}
+
+.aa-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.aa-line b { flex: none; color: var(--down); font-weight: 700; }
+.aa-detail { min-width: 0; color: var(--text-1); }
+
+.aa-icon {
+  flex: none;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--down);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* ---------------- Confirmations ---------------- */
+
+.algo-dialog {
+  width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-1);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+}
+
+.algo-dialog::backdrop { background: rgba(8, 10, 14, 0.45); }
+.algo-dialog form { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px 16px; }
+.algo-dialog h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.algo-dialog.live { border-color: color-mix(in srgb, var(--down) 55%, var(--border)); }
+.algo-dialog.live h2 { color: var(--down); }
+
+.ad-lead, .ad-note { margin: 0; color: var(--text-2); line-height: 1.45; }
+.ad-note { font-size: 12px; color: var(--text-3); }
+
+.ad-rows {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.ad-rows dt { color: var(--text-3); font-size: 11px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; line-height: 18px; }
+.ad-rows dd { margin: 0; font-variant-numeric: tabular-nums; line-height: 18px; }
+
+.ad-items { margin: 0; padding-left: 18px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+
+.ad-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.ad-actions .btn { min-width: 96px; font-weight: 600; }
+
+.btn.danger { background: var(--down); border-color: var(--down); color: #fff; }
+.btn.danger:hover { filter: brightness(1.08); }
+
+/* ---------------- The alert log's algo entries ---------------- */
+
+.alert-log-list .algo .icon, .alert-log-list .algo b { color: var(--accent); }
+.alert-log-list .algo .icon { font-weight: 800; text-align: center; }
+.alert-log-list .algo.opened .icon, .alert-log-list .algo.opened b { color: var(--o); }
+.alert-log-list .algo.booked .icon, .alert-log-list .algo.booked b,
+.alert-log-list .algo.closed .icon, .alert-log-list .algo.closed b { color: var(--up); }
+.alert-log-list .algo.loss .icon, .alert-log-list .algo.loss b,
+.alert-log-list .algo.failed .icon, .alert-log-list .algo.failed b,
+.alert-log-list .algo.alarm .icon, .alert-log-list .algo.alarm b { color: var(--down); }
+
+/* ---------------- Toasts ---------------- */
+
+.toast.info { border-left-color: var(--accent); }
+.toast.info .toast-icon, .toast.info .toast-timer { color: var(--accent); }
+.toast.info .toast-icon { font-weight: 800; font-style: italic; font-family: Georgia, serif; }
+.toast.loss { border-left-color: var(--down); }
+.toast.loss .toast-icon, .toast.loss .toast-timer { color: var(--down); }
+
+@media (max-width: 1366px) {
+  .algo-toggle { padding: 0 8px; }
+  .ar-levels { display: none; }
+}

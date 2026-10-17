@@ -12,7 +12,9 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+import algo.web
 import kite.web
+from algo.runner import AlgoRunner
 
 from .engine import KEEP, Engine
 from .neo import NeoError, NeoGateway
@@ -51,9 +53,12 @@ def make_engine() -> Engine:
 async def lifespan(app: FastAPI):
     app.state.engine = make_engine()  # loads .env, which the Kite broker reads too
     app.state.broker = kite.web.make_broker()
+    app.state.algo = AlgoRunner(app.state.engine, app.state.broker)
     app.state.engine.start()
     app.state.broker.start()
+    app.state.algo.start()
     yield
+    await app.state.algo.stop()
     await app.state.broker.stop()
     await app.state.engine.stop()
 
@@ -62,6 +67,7 @@ app = FastAPI(title="Straddle P&F", lifespan=lifespan)
 app.add_middleware(LocalOnly)  # other sites' pages: no requests, WebSockets or framing
 app.mount("/static", RevalidatingStaticFiles(directory=STATIC), name="static")
 kite.web.install(app)  # order placement and positions through Zerodha Kite
+algo.web.install(app)  # the algo: automatic entries and exits on the charts' signals
 
 
 class LoginBody(BaseModel):
@@ -118,6 +124,13 @@ async def login(body: LoginBody):
 
 @app.post("/api/config", status_code=202)
 async def configure(body: ConfigBody):
+    algo_runner = getattr(app.state, "algo", None)
+    if algo_runner is not None and algo_runner.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="The algo is On or managing a trade on these charts: switch it Off first "
+            "(its open trades are then yours) to change the index, expiry, ATM or days.",
+        )
     u = UNDERLYINGS[body.underlying]
     if body.atm is not None and body.atm % u.strike_step:
         raise HTTPException(status_code=422, detail=f"{u.key} ATM must be a multiple of {u.strike_step}")

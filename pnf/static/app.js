@@ -3,6 +3,7 @@ import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from './char
 import { mountExpand } from './expand.js';
 import { alertWanted, istDay } from './pnf.js';
 import { loadOverlays, mountMenu, saveOverlays } from './view.js';
+import { mountAlgo, updateAlgo } from '/algo/static/algo.js';
 import { mountTrading, updateTrading } from '/kite/static/trading.js';
 
 const MAX_DAYS = 15;
@@ -67,12 +68,16 @@ const state = {
   atmDirty: false,
   alerted: new Set(), // signal keys already alerted, so a re-sent bar never alerts twice
   alerts: [], // the server's alert log, newest first
+  algoLocked: false, // the algo is On or managing a trade: the charts must stay as they are
 };
 
 const SIGNAL_NAMES = { buy: 'Double top buy', sell: 'Double bottom sell' };
 state.overlays = loadOverlays();
 const FLASH_MS = 8000;
 const CATCHUP_ALERT_S = 5 * 60; // after a reconnect, signals at most this old still alert
+const ALGO_LOCK = 'Locked while the algo is On or managing a trade: switch it Off first';
+// The alert log's icon for each kind of algo entry (the server's event kinds, and alarms).
+const ALGO_ICONS = { opened: '▼', booked: '✓', closed: '✓', failed: '!', alarm: '!', skipped: 'i', state: '●' };
 
 for (let d = 1; d <= MAX_DAYS; d++) els.days.add(new Option(String(d), String(d)));
 
@@ -317,11 +322,15 @@ function renderAlertLog() {
   els.alertLogEmpty.hidden = state.alerts.length > 0;
   els.alertLogList.replaceChildren(...state.alerts.map((a) => {
     const li = document.createElement('li');
-    li.className = `${a.type}${a.loggedAt > seenAtOpen ? ' unseen' : ''}`;
-    const isError = a.type === 'error'; // an error a page showed (e.g. a Kite order not placed)
+    const isAlgo = a.type === 'algo'; // what the algo did, or an alarm it raised
+    const loss = isAlgo && a.kind === 'closed' && a.pnl != null && a.pnl < 0;
+    li.className = `${a.type}${isAlgo ? ` ${loss ? 'loss' : a.kind}` : ''}${a.loggedAt > seenAtOpen ? ' unseen' : ''}`;
+    const isError = a.type === 'error' || isAlgo; // an error a page showed (e.g. a Kite order not placed)
     const icon = document.createElement('span');
     icon.className = 'icon';
-    icon.textContent = isError ? '!' : a.type === 'buy' ? '\u25b2' : '\u25bc';
+    icon.textContent = isAlgo
+      ? loss ? '\u25a0' : ALGO_ICONS[a.kind] ?? '\u25cf'
+      : isError ? '!' : a.type === 'buy' ? '\u25b2' : '\u25bc';
     const title = document.createElement('b');
     title.textContent = isError ? a.title : `${SIGNAL_NAMES[a.type]} \u00b7 ${offsetLabel(a.offset)}`;
     const when = isError ? a.loggedAt : a.barTs;
@@ -372,7 +381,7 @@ function renderPanels() {
   renderTrading();
 }
 
-/** Tell the Kite trading UI (order bars, positions strip) what the charts show. */
+/** Tell the Kite trading UI (order bars, positions strip) and the algo what the charts show. */
 function renderTrading() {
   updateTrading({
     underlying: builtKey(),
@@ -380,6 +389,13 @@ function renderTrading() {
     panels: [...state.panels.values()].map(({ root, def }) => ({ root, def })),
     live: state.live,
   });
+  updateAlgo({ panels: [...state.panels.values()], live: state.live });
+}
+
+/** While the algo is On or managing a trade, the charts it trades stay as they are. */
+function setAlgoLocked(locked) {
+  state.algoLocked = locked;
+  renderTopbar();
 }
 
 // ---------------- Top bar ----------------
@@ -414,6 +430,13 @@ function renderTopbar() {
 
   els.apply.hidden = !state.atmDirty;
   els.zoomFit.setAttribute('aria-pressed', String(state.cellOverride == null));
+  const locked = state.algoLocked;
+  for (const [control, title] of [[els.underlying, 'Index'], [els.atm, ''], [els.apply, ''], [els.days, 'Trading sessions of history']]) {
+    control.disabled = locked;
+    control.title = locked ? ALGO_LOCK : title;
+  }
+  els.atmAuto.disabled = locked;
+  if (locked) els.atmAuto.title = ALGO_LOCK;
 
   // Feed status
   const feed = state.status?.feed;
@@ -444,7 +467,8 @@ function renderExpiryOptions(cfg) {
   if (current) els.expiry.value = current.role;
   // The options belong to the charts on screen: while another index loads, they
   // are not that index's to pick from (BANKNIFTY has monthlies only).
-  els.expiry.disabled = !options.length || cfg.underlying !== cfg.built.key;
+  els.expiry.disabled = !options.length || cfg.underlying !== cfg.built.key || state.algoLocked;
+  els.expiry.title = state.algoLocked ? ALGO_LOCK : '';
 }
 
 function renderBanner() {
@@ -787,4 +811,11 @@ els.login.addEventListener('submit', async (e) => {
 });
 
 mountTrading({ topbar: document.querySelector('.topbar'), before: document.querySelector('.feed'), banner: els.banner });
+// The Algo button sits just before the Kite account; its alarm bar right under the banner.
+mountAlgo({
+  topbar: document.querySelector('.topbar'),
+  before: document.querySelector('.kite-account'),
+  banner: els.banner,
+  onLock: setAlgoLocked,
+});
 connect();

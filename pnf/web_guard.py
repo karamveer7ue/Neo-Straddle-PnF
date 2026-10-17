@@ -16,9 +16,11 @@ without the protection:
   (the pages load only their own scripts and styles).
 """
 
+import re
 from urllib.parse import urlsplit
 
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]"}
+HOST_RE = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?")  # the whole header, port included
 SAFE_METHODS = {"GET", "HEAD"}
 REFUSED = b"Requests must come from the app's own page."
 
@@ -26,15 +28,12 @@ REFUSED = b"Requests must come from the app's own page."
 def same_origin(host: str | None, origin: str | None) -> bool:
     """True for a request from this app's own page: a loopback Host, and an Origin
     (when sent) of that same host. A DNS-rebinding page has its own host name."""
-    if not host:
-        return False
-    hostname = host.rsplit(":", 1)[0] if not host.endswith("]") else host
-    if hostname not in LOOPBACK:
+    if not host or not HOST_RE.fullmatch(host):  # the whole value: it is quoted in the CSP
         return False
     if origin is None:
         return True  # same-origin GETs and top-level navigations may omit it
     parts = urlsplit(origin)
-    return parts.scheme in ("http", "https") and parts.netloc == host
+    return parts.scheme == "https" and parts.netloc == host  # both servers are HTTPS-only
 
 
 def security_headers(host: str) -> list[tuple[bytes, bytes]]:

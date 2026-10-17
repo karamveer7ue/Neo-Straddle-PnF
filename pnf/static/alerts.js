@@ -48,6 +48,49 @@ export function setSoundEnabled(on) {
 
 const audioReady = () => audio?.state === 'running';
 
+/** Sounds are on, but the page may not play them until the first click or key press. */
+export const soundWaiting = () => soundEnabled() && !audioReady();
+
+// The algo's sounds (algo/static/algo.js): [frequency, start offset in seconds] per note.
+const TONES = {
+  open: { wave: 'triangle', notes: [[659.25, 0], [493.88, 0.16]] }, // a trade opened: falling
+  book: { wave: 'triangle', notes: [[493.88, 0], [659.25, 0.16]] }, // part bought back: rising
+  close: { wave: 'triangle', notes: [[523.25, 0], [659.25, 0.13], [783.99, 0.26]] }, // a trade closed
+  alarm: { wave: 'square', gain: 0.16, notes: [[880, 0], [659.25, 0.2], [880, 0.4], [659.25, 0.6]] },
+};
+
+/**
+ * Play one of the algo's sounds, if sounds are on and the page may play them.
+ * @param {'open'|'book'|'close'|'alarm'} name
+ * @returns {boolean} whether it played
+ */
+export function playTone(name) {
+  if (!soundEnabled() || !audioReady()) return false;
+  const tone = TONES[name];
+  const start = audio.currentTime + 0.02;
+  for (const [freq, offset] of tone.notes) {
+    const t = start + offset;
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = tone.wave;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(tone.gain ?? 0.32, t + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t);
+    osc.stop(t + 0.2);
+  }
+  return true;
+}
+
+/** A system notification, only while the tab is in the background (and allowed). */
+export function notifyHidden(title, body, tag) {
+  if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body, tag });
+  }
+}
+
 /** Buy: a rising three-note chime. Sell: the same falling. Played twice. */
 export function playSignal(type) {
   const ctx = ensureAudio();

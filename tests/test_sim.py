@@ -240,6 +240,10 @@ def test_a_contract_not_trading_on_the_context_day_starts_at_the_run():
     assert not any(c["error"] for c in run["charts"])
 
 
+# How a run requested for 9 Oct (13 Oct expiry, Auto ATM) on 12 Oct is named to the page.
+RUN_KEY = "NIFTY|2026-10-13|2026-10-09|2026-10-09|None|2026-10-12"
+
+
 def test_identical_simulate_requests_share_one_build(monkeypatch):
     import httpx
 
@@ -267,7 +271,7 @@ def test_identical_simulate_requests_share_one_build(monkeypatch):
             replies = await asyncio.gather(*(client.post("/api/simulate", json=body) for _ in range(3)))
         return [r.json() for r in replies]
 
-    assert asyncio.run(scenario()) == [{"ok": True}] * 3
+    assert asyncio.run(scenario()) == [{"ok": True, "key": RUN_KEY}] * 3  # the key names it to /api/algo
     assert len(builds) == 1
 
 
@@ -303,7 +307,7 @@ def test_a_cached_run_needs_no_api_call_and_a_build_is_kept_when_its_caller_leav
             again = await client.post("/api/simulate", json=body)
         return again.json()
 
-    assert asyncio.run(scenario()) == {"ok": True}
+    assert asyncio.run(scenario()) == {"ok": True, "key": RUN_KEY}
     assert len(builds) == 1  # the abandoned build was cached, not thrown away
     assert expiry_calls == ["NIFTY"]  # the cached run was served without asking the API
 

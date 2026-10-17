@@ -7,6 +7,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/kite/static/trading.css">
+  <link rel="stylesheet" href="/algo/static/algo.css">
   <script type="module" src="/static/app.js"></script>
 </head>
 <body>
@@ -136,11 +137,11 @@
   <section class="alert-log" id="alert-log" role="dialog" aria-label="Alert log" hidden>
     <header class="alert-log-head">
       <h2>Alert log</h2>
-      <span class="alert-log-sub">last 30 signals and errors</span>
+      <span class="alert-log-sub">last 30 signals, algo actions and errors</span>
       <button type="button" class="toast-close" id="alert-log-close" aria-label="Close">&times;</button>
     </header>
     <ol class="alert-log-list" id="alert-log-list"></ol>
-    <p class="alert-log-empty" id="alert-log-empty">No alerts yet. Double bottom sell alerts (straddle below VWAP) and errors (e.g. an order not placed) appear here as they happen; the last 30 are kept.</p>
+    <p class="alert-log-empty" id="alert-log-empty">No alerts yet. Double bottom sell alerts (straddle below VWAP), what the algo does, and errors (e.g. an order not placed) appear here as they happen; the last 30 are kept.</p>
   </section>
 </body>
 </html>

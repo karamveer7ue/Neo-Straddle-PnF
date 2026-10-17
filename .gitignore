@@ -6,6 +6,9 @@
 # Local state written by the app
 .pnf-config.json
 .pnf-alerts.json
+.pnf-algo.json
+.pnf-algo.lock
+.pnf-algo.json.unreadable*
 .kite-session.json
 .kite-journal.json
 *.tmp

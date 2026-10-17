@@ -234,8 +234,9 @@ class NeoGateway:
     ) -> dict[tuple[int, str], dict]:
         """Map (strike, 'CE'|'PE') -> leg for one expiry of the underlying's options.
 
-        A leg is {"key": "<segment>|<token>", "segment", "token", "symbol"}; the key
-        is unique across exchanges (NSE and BSE token numbers can overlap).
+        A leg is {"key": "<segment>|<token>", "segment", "token", "symbol", "lotSize"};
+        the key is unique across exchanges (NSE and BSE token numbers can overlap),
+        and lotSize is None when the scrip master leaves it out.
         """
         response = await self._call_with_retry(
             self.client.search_scrip,
@@ -254,11 +255,16 @@ class NeoGateway:
             strike = round(float(row["dStrikePrice;"]) / 100)  # scrip master stores paise
             if strike in wanted:
                 token = str(row["pSymbol"])
+                try:
+                    lot_size = int(float(row.get("lLotSize") or 0)) or None
+                except (TypeError, ValueError):
+                    lot_size = None
                 found[(strike, str(row["pOptionType"]).upper())] = {
                     "key": f"{u.fo_segment}|{token}",
                     "segment": u.fo_segment,
                     "token": token,
                     "symbol": row["pTrdSymbol"],
+                    "lotSize": lot_size,
                 }
         return found
 

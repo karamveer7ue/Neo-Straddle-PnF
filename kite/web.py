@@ -27,11 +27,11 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket, WebSo
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from pnf.series import UnderlyingKey
+from pnf.series import UNDERLYINGS, UnderlyingKey
 from pnf.static_files import RevalidatingStaticFiles
 from pnf.web_guard import same_origin
 
-from .broker import DEFAULT_MAX_LOTS, DEFAULT_PRODUCT, KiteBroker
+from .broker import DEFAULT_PRODUCT, KiteBroker
 from .gateway import KiteError, KiteGateway, SessionExpired
 from .order_relay import RelayAuth, check_settings
 
@@ -47,12 +47,13 @@ def make_broker() -> KiteBroker:
     product = os.getenv("KITE_PRODUCT", DEFAULT_PRODUCT).strip().upper()
     if product not in ("NRML", "MIS"):
         raise RuntimeError(f"KITE_PRODUCT must be NRML or MIS, not {product!r}")
-    try:
-        max_lots = int(os.getenv("KITE_MAX_LOTS", str(DEFAULT_MAX_LOTS)))
-    except ValueError as exc:
-        raise RuntimeError("KITE_MAX_LOTS must be a whole number") from exc
-    if max_lots < 1:
-        raise RuntimeError("KITE_MAX_LOTS must be at least 1")
+    if os.getenv("KITE_MAX_LOTS", "").strip():
+        caps = ", ".join(f"{key} {u.max_sell_qty:,}" for key, u in UNDERLYINGS.items())
+        log.warning(
+            "KITE_MAX_LOTS in .env is no longer used: every sell is capped at twice the algo's "
+            "default quantity (%s)",
+            caps,
+        )
     relay_url = os.getenv("KITE_ORDER_RELAY", "").strip()
     relay_secret = os.getenv("KITE_RELAY_SECRET", "").strip()
     order_auth = None
@@ -63,7 +64,7 @@ def make_broker() -> KiteBroker:
     gateway = KiteGateway(key, secret, order_auth=order_auth) if key and secret else None
     if gateway is None:
         log.info("Kite trading is off: KITE_API_KEY / KITE_API_SECRET not in .env")
-    return KiteBroker(gateway, product=product, max_lots=max_lots)
+    return KiteBroker(gateway, product=product)
 
 
 def install(app: FastAPI) -> None:

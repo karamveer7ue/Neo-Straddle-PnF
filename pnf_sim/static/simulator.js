@@ -9,6 +9,7 @@ import { CELL_STEPS, PnfPanel, dateKey, fmtDay, fmtPrice, fmtTime } from '/stati
 import { mountExpand } from '/static/expand.js';
 import { alertWanted } from '/static/pnf.js';
 import { loadOverlays, mountMenu, saveOverlays } from '/static/view.js';
+import { createSimAlgo } from './algo-sim.js';
 import { Player, SPEEDS } from './player.js';
 import { LOTS_PER_SELL, ShortStraddleTrade } from './trades.js';
 
@@ -21,6 +22,7 @@ const els = {
   end: $('end'),
   atm: $('atm'),
   load: $('load'),
+  playbar: $('playbar'),
   play: $('play'),
   playLabel: $('play-label'),
   restart: $('restart'),
@@ -74,6 +76,10 @@ const state = {
   formingKey: '', // which in-minute step is on screen, so each is drawn once
   formingSpot: null,
 };
+
+// The algo over the replay (algo-sim.js): the live page's Algo menu, chart lines and marks.
+const algo = createSimAlgo({ now: replayNow });
+algo.mount({ topbar: els.playbar, before: document.querySelector('.playbar .view-menu'), banner: els.banner });
 
 // ---------------- Small helpers ----------------
 
@@ -185,6 +191,7 @@ async function loadOptions(underlying = state.underlying) {
     state.underlying = underlying;
     state.pendingUnderlying = null;
     state.options = opts;
+    algo.setOptions(opts.algo);
     renderUnderlyings(opts.underlyings);
     els.expiry.replaceChildren(...opts.expiries.map((iso) =>
       new Option(`${fmtDate(iso)} · ${fmtDate(iso, { weekday: 'short' })}`, iso)));
@@ -284,6 +291,7 @@ function startRun(run) {
   els.spotBox.hidden = false;
   reveal(-1, false);
 
+  algo.setRun(run); // with the algo On, it replays from this run's start
   const days = run.sessions.map((d) => fmtDate(d)).join(', ');
   const atmFrom = run.atm === run.atmAuto
     ? `ATM ${fmtStrike(run.atm)} from the ${fmtDate(run.sessions[0])} open (${fmtPrice(run.indexOpen)})`
@@ -341,6 +349,34 @@ function reveal(i, stepping) {
   // screen (and a Sell or Exit made now) is at that moment, not at the last close -
   // at the run start or a session's first minute, that close is the day before's.
   showFormingMinute();
+  algo.update(algoContext(), stepping);
+}
+
+/** The replay's current moment (epoch seconds), as the clock shows it. */
+function replayNow() {
+  const p = state.player;
+  if (!p || !state.minutes.length) return 0;
+  const ts = state.minutes[p.index]; // undefined before the first minute
+  if (p.atEnd) return ts + 60;
+  return state.minutes[p.index + 1] + Math.floor(p.progress * 60);
+}
+
+/** The charts for the algo's lines and marks, priced at the step on screen. */
+function algoContext() {
+  const panels = [];
+  const legs = {};
+  for (const entry of state.panels.values()) {
+    const key = entry.def.key;
+    const def = { error: entry.def.error, ce: { key: `sim|${key}|CE` }, pe: { key: `sim|${key}|PE` } };
+    panels.push({ root: entry.root, def, panel: entry.panel });
+    const last = entry.panel.series[entry.panel.series.length - 1];
+    const prices = entry.liveLegs ?? (last ? { ce: last[3], pe: last[4] } : null);
+    if (prices) {
+      legs[def.ce.key] = prices.ce;
+      legs[def.pe.key] = prices.pe;
+    }
+  }
+  return { panels, live: { legs } };
 }
 
 /**
@@ -372,6 +408,7 @@ function showFormingMinute() {
   const spot = state.spotRows.get(ts);
   state.formingSpot = spot ? spot[2][k] : null;
   renderClock();
+  algo.update(algoContext(), p.playing);
 }
 
 function seekTo(i) {
@@ -495,7 +532,11 @@ function renderPlayback() {
   els.restart.disabled = off;
   for (const btn of els.speeds.children) btn.setAttribute('aria-pressed', String(Number(btn.dataset.speed) === state.speed));
   if (p?.atEnd && !state.loading) {
-    showBanner('Replay finished. Drag the timeline or press Back to the start to watch again.', 'ok', 'finished');
+    const total = algo.on ? algo.total() : null;
+    const result = total
+      ? ` Algo: ${total.trades} trade${total.trades === 1 ? '' : 's'}, ${total.won} won, ${total.lost} lost, ${fmtRupees(total.booked)}.`
+      : '';
+    showBanner(`Replay finished.${result} Drag the timeline or press Back to the start to watch again.`, 'ok', 'finished');
   } else if (state.bannerTag === 'finished') showBanner('');
 }
 

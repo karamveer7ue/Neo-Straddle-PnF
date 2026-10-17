@@ -95,8 +95,8 @@ function connect() {
     if (msg.type === 'kite') {
       k.server = msg;
       render();
-    } else if (msg.type === 'order') {
-      orderToast(msg);
+    } else if (msg.type === 'order' && !msg.algo) {
+      orderToast(msg); // the algo reports its own orders (algo.js)
     }
   };
   ws.onclose = () => {
@@ -187,7 +187,7 @@ function claim(key, action) {
 
 async function sell(target, input) {
   const qty = Number(input.value);
-  const check = checkQuantity(qty, target.lotSize, k.server?.maxLots);
+  const check = checkQuantity(qty, target.lotSize, k.server?.maxQty?.[target.underlying]);
   if (!check.ok) {
     input.setCustomValidity(check.error);
     input.reportValidity();
@@ -441,7 +441,7 @@ function renderBar(panel) {
     const want = storedQty(underlying) ?? lotSize;
     if (want) input.value = String(want);
   }
-  const check = checkQuantity(Number(input.value), lotSize, s?.maxLots);
+  const check = checkQuantity(Number(input.value), lotSize, s?.maxQty?.[underlying]);
   input.setAttribute('aria-invalid', String(!!input.value && !check.ok && !!lotSize));
 
   const busy = key ? k.busy.get(key) : null;

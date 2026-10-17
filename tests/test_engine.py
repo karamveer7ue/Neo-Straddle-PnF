@@ -25,6 +25,8 @@ def candles_for(day: date, minutes: int, base: float) -> list:
     return rows
 
 
+LOT_SIZES = {"NIFTY": 65, "BANKNIFTY": 30, "SENSEX": 20}
+
 QUOTES = {
     "NIFTY": {"ltp": 22520.45, "open": 22314.95, "prev_close": 22231.8},
     "SENSEX": {"ltp": 72472.33, "open": 72349.5, "prev_close": 71593.24},
@@ -77,7 +79,8 @@ class FakeGateway:
         return dict(self.future_quote)
 
     async def option_contracts(self, u, expiry, strikes):
-        return {(s, k): leg(u.fo_segment, s, k) for s in strikes for k in ("CE", "PE")}
+        lot = LOT_SIZES[u.key]  # the scrip master's lLotSize
+        return {(s, k): {**leg(u.fo_segment, s, k), "lotSize": lot} for s in strikes for k in ("CE", "PE")}
 
     def create_feed(self):
         return FakeFeed(self)
@@ -909,3 +912,34 @@ def test_the_sdk_log_never_records_login_credentials(tmp_path):
     text = out.getvalue()
     assert "api_error_response" in text and "401" in text  # the event itself is kept
     assert "9876543210" not in text and "UCC123" not in text and "13***90" not in text
+
+
+class SilentFeed(FakeFeed):
+    """Connects, then never delivers a packet (a connection that died without a close)."""
+
+    async def __anext__(self):
+        await asyncio.Event().wait()
+
+
+def test_a_feed_that_goes_silent_in_session_is_reconnected(clock, make_engine):
+    async def scenario(eng):
+        await eng._build()
+        eng.gw.logged_in = True
+        eng.gw.create_feed = lambda: SilentFeed(eng.gw)
+        eng._start_feed()
+        while eng.feed_state != "live":
+            await asyncio.sleep(0.01)
+        first = eng._feed_task
+        eng._on_feed(tick("22300CE", 125.0))  # a packet keeps it alive
+        eng._check_feed_stale(clock["t"])
+        assert eng.feed_state == "live" and eng._feed_task is first
+        eng._feed_at -= engine_mod.FEED_STALE_SECONDS + 1  # then nothing for over 30 s
+        eng._check_feed_stale(clock["t"].replace(hour=15, minute=35))  # after the session: no judgement
+        assert eng.feed_state == "live"
+        eng._check_feed_stale(clock["t"])
+        assert eng.feed_state in ("reconnecting", "connecting") and eng._feed_task is not first
+        await asyncio.sleep(0.05)
+        assert first.cancelled() or first.done()
+        eng._feed_task.cancel()
+
+    asyncio.run(scenario(make_engine()))

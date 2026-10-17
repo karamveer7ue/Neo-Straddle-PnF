@@ -2,7 +2,7 @@
 
 Replays past NIFTY, BANKNIFTY or SENSEX sessions minute by minute on the same three straddle Point & Figure charts as the live page (ATM - 200, ATM, ATM + 200 for NIFTY; ATM - 500, ATM, ATM + 500 for BANKNIFTY and SENSEX), at 1X, 10X, 50X, 100X or 200X.
 
-It is a separate app, so the live page is never affected, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, VWMA 10, signal detection, the chart renderer and the alerts.
+It is a separate app, so the live page is never affected, and it reuses the live app's code unchanged: the Neo API gateway, the straddle series rules, the Point & Figure engine, VWAP, VWMA 10, signal detection, the chart renderer, the alerts and the algo.
 It needs only the consumer key from `.env` (market data), so it never asks for a TOTP.
 
 ## Running
@@ -35,6 +35,7 @@ To run the simulator on its own:
 | **Timeline** | Drag to jump to any minute (keyboard: left and right arrows step one minute). The thin bar below it shows the time left until the next minute appears. |
 | **Clock** | The simulated time (to the second) and the minute count. |
 | **Spot** | The index at the simulated time, with its change since the previous session's close. |
+| **Algo** | Runs the live page's algo over the replay, on paper (see [The algo](#the-algo)). |
 | **View (VWAP / VWMA 10, box size), bell, expand** | As on the live page. |
 
 ## How a run works
@@ -65,6 +66,26 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
   Going back along the timeline clears the simulated trades opened (or exited) after the point you go back to, since they have not happened yet; earlier trades and moving forward keep them, and loading a new run starts afresh.
   Signals after that point alert again when they are replayed.
 
+## The algo
+
+The **Algo** button in the playbar runs the live page's [algo](../README.md#algo-trading) over the replay, with the same rules and the same chart maths, on paper only.
+Its menu is the live page's, without the Mode choice and the Exit buttons.
+
+- **Switching it On:** load a run, then press **Algo**; it trades from the moment on the timeline (from the start of the run at "minute 0"), with no confirmation.
+- **Each session:** it switches itself On again at every later session's open, since nobody is there to do it, and goes Off at the Exit Time, after the daily loss limit or once Last entry has passed, as on the live page.
+- **Prices:** it trades at the minute closes the charts are built from; Max loss per trade and the Daily loss limit also watch the four price steps within each minute.
+  Slippage and charges are left out.
+- **What you see:** the line under each chart's header, the lines and triangles on the charts, the day's trades in the Algo menu, and a toast for each algo action (with a sound for a trade opened, booked or closed) while the replay plays.
+- **The timeline:** dragging it shows the algo's trades as they stood at that moment, without toasts; a trade after that moment is gone until the replay reaches it again.
+- **Settings:** the simulator keeps its own, in the browser, apart from the live page's; Quantity and Target Points are those of the run's index.
+  Changing a setting while the algo is On works the run's trades out again with it.
+- **Off** takes the algo's trades off the replay; switched On again, it starts afresh from that moment.
+  Loading a new run with the algo On replays the algo from that run's start.
+- **At the end,** the "Replay finished" banner adds the algo's result, for example "Algo: 3 trades, 2 won, 1 lost, +₹12,480."
+- The algo's trades and the trade bars under the charts are separate: neither sees the other.
+
+The server works out every algo trade of a run at once when the algo is switched On (`POST /api/algo`, `algo/sim.py`), and the page shows them as the replay reaches them.
+
 ## Limits
 
 - **Only contracts still listed today can be replayed.** The API cannot fetch expired option contracts, so a past day is replayed with one of the next listed expiries.
@@ -76,14 +97,16 @@ Each chart has a trade bar at the bottom for practising a short straddle (sellin
 
 | Path | Purpose |
 | --- | --- |
-| `pnf_sim/app.py` | FastAPI server: the page, `GET /api/options`, `POST /api/simulate`; serves the live app's static files read-only at `/static`. |
+| `pnf_sim/app.py` | FastAPI server: the page, `GET /api/options`, `POST /api/simulate`, `POST /api/algo` (the algo's trades over a run); serves the live app's static files read-only at `/static`, and the algo's at `/algo/static`. |
 | `pnf_sim/replay.py` | Builds a run: date checks, expiries offered, the context day before the run, strikes from the start day's open, the straddle series with CE and PE prices and each minute's price path, previous closes for the spot. |
 | `pnf_sim/static/simulator.html`, `simulator.js`, `sim.css` | The page. |
 | `pnf_sim/static/player.js` | The replay clock (speed, pause, seek); no DOM, unit-tested in Node. |
 | `pnf_sim/static/trades.js` | Simulated short-straddle trades and their P&L; no DOM, unit-tested in Node. |
-| `tests/test_sim.py`, `tests/sim.test.mjs` | Tests. |
+| `pnf_sim/static/algo-sim.js` | The algo over the replay: its settings, and its trades as of the replay's moment, shown through the live page's Algo menu (`algo/static/ui.js`). |
+| `algo/sim.py` | Works out the algo's trades over a run with the live page's rules (`algo/core.py`) and chart maths (`pnf/pnf.py`). |
+| `tests/test_sim.py`, `tests/sim.test.mjs`, `tests/test_algo_sim.py` | Tests. |
 
 ```sh
-.venv/bin/python -m pytest tests/test_sim.py
+.venv/bin/python -m pytest tests/test_sim.py tests/test_algo_sim.py
 node --test tests/sim.test.mjs
 ```

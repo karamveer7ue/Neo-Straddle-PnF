@@ -3,7 +3,7 @@ and positions netted the way Kite nets them. Used by tests/test_kite.py, and
 handy for running the app without a Kite account.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 from kiteconnect import exceptions as kex
 
@@ -115,6 +115,7 @@ class FakeKite:
         self.before: dict = {}  # method name -> fn(fake), run as that call starts (e.g. to raise)
         self.lag_fills = 0  # positions() leaves out this many of the newest fills (Kite lagging)
         self.session_valid = True
+        self.clock = datetime.now  # when orders are taken (order_timestamp): tests set their clock
         self._next_id = 1000
 
     # ---- session ----
@@ -204,6 +205,8 @@ class FakeKite:
             "product": params["product"],
             "quantity": quantity,
             "tag": params.get("tag"),
+            # As the SDK hands it over: a naive datetime, in IST.
+            "order_timestamp": self.clock().replace(tzinfo=None, microsecond=0),
             "status": "OPEN",
             "status_message": None,
             "filled_quantity": 0,
@@ -224,20 +227,44 @@ class FakeKite:
     def complete(self, order_id):
         """Fill an order held open."""
         order = next(o for o in self.order_book if o["order_id"] == order_id)
-        fill = self.price(order["tradingsymbol"])
+        self.fill(order_id, order["quantity"] - order["filled_quantity"])
+
+    def fill(self, order_id, quantity):
+        """Fill part (or the rest) of an order held open, at the symbol's price."""
+        order = next(o for o in self.order_book if o["order_id"] == order_id)
+        price = self.price(order["tradingsymbol"])
+        filled = order["filled_quantity"] + quantity
+        average = (order["average_price"] * order["filled_quantity"] + price * quantity) / filled
         order.update(
-            status="COMPLETE", filled_quantity=order["quantity"], pending_quantity=0, average_price=fill
+            filled_quantity=filled, pending_quantity=order["quantity"] - filled, average_price=average
         )
+        if filled >= order["quantity"]:
+            order["status"] = "COMPLETE"
         self.fills.append(
             {
                 "exchange": order["exchange"],
                 "tradingsymbol": order["tradingsymbol"],
                 "transaction_type": order["transaction_type"],
                 "product": order["product"],
-                "quantity": order["quantity"],
-                "price": fill,
+                "quantity": quantity,
+                "price": price,
             }
         )
+
+    def cancel_order(self, variety, order_id, parent_order_id=None):
+        """Cancel what is left of a working order; Kite refuses once it has finished."""
+        self._check("cancel_order")
+        order = next((o for o in self.order_book if o["order_id"] == order_id), None)
+        if order is None:
+            raise kex.InputException("Invalid `order_id`.", code=400)
+        if order["status"] in ("COMPLETE", "REJECTED", "CANCELLED"):
+            raise kex.InputException("Order cannot be modified as it is being processed.", code=400)
+        order.update(
+            status="CANCELLED",
+            pending_quantity=0,
+            cancelled_quantity=order["quantity"] - order["filled_quantity"],
+        )
+        return order_id
 
     def orders(self):
         self._check("orders")
@@ -287,3 +314,18 @@ class FakeKite:
             pnl = r["sell_value"] - r["buy_value"] + qty * last * r["multiplier"]
             net.append({**r, "quantity": qty, "average_price": avg, "last_price": last, "pnl": pnl})
         return {"net": net, "day": []}
+
+
+class OrderClient:
+    """A second SDK client over the same fake account, as KiteGateway's order client is in
+    the app: reads and orders then run on separate locks, so a refresh can land while an
+    order is on its way."""
+
+    def __init__(self, fake: FakeKite):
+        object.__setattr__(self, "_fake", fake)
+
+    def __getattr__(self, name):
+        return getattr(self._fake, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._fake, name, value)

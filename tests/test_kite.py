@@ -147,15 +147,19 @@ def test_sell_places_ce_then_pe_at_market_with_protection(connected):
     ]
 
 
-def test_sell_checks_quantity_and_lot_limit(connected):
-    b, fake = connected(max_lots=5)
+def test_sell_checks_quantity_and_the_size_cap(connected):
+    b, fake = connected()
     with pytest.raises(KiteError, match="multiple of the lot size, 65"):
         asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 100))
-    with pytest.raises(KiteError, match="5-lot limit"):
-        asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 65 * 6))
+    # Never more than twice the algo's default quantity (NIFTY 1,690): 3,380.
+    with pytest.raises(KiteError, match=r"3,445 is above the 3,380 limit for NIFTY"):
+        asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 3445))
     with pytest.raises(KiteError, match="no NIFTY 22325"):
         asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22325, 65))
     assert fake.placed == []
+    assert b.state_json()["maxQty"] == {"NIFTY": 3380, "BANKNIFTY": 1440, "SENSEX": 960}
+    res = asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 3380))  # exactly the cap
+    assert [r["ok"] for r in res["results"]] == [True, True]
 
 
 def test_pe_is_held_back_when_the_ce_is_refused(connected):
@@ -516,26 +520,30 @@ def test_reads_are_retried_on_server_errors(files):
 
 
 def test_orders_are_sliced_only_above_the_exchanges_maximum(connected):
-    b, fake = connected(max_lots=60)
+    b, fake = connected()
     sensex = date(2026, 10, 15)
     # 260 SENSEX (13 lots) is one plain order: Kite refuses slicing below 1,000
     # ("Quantity should be greater than or equal to 1000 for order slicing").
     res = asyncio.run(b.sell("SENSEX", sensex, 72300, 260))
     assert [r["ok"] for r in res["results"]] == [True, True]
     assert fake.calls[-2:] == ["place_order", "place_order"]
-    # Exactly the maximum is still one order.
-    asyncio.run(b.sell("SENSEX", sensex, 72300, 1000))
+    asyncio.run(b.sell("SENSEX", sensex, 72300, 960))  # the size cap: still one order
     assert fake.calls[-2:] == ["place_order", "place_order"]
-    # Above it (an exit of 1,260 here), Kite slices it into orders of at most 1,000.
+    # Exactly the exchange's maximum is still one order.
+    args = dict(exchange="BFO", side="SELL", product="NRML", tag="pnf", max_quantity=1000)
+    asyncio.run(b.gw.place_market_order(tradingsymbol="SENSEX26O1572300CE", quantity=1000, **args))
+    assert fake.calls[-1] == "place_order"
+    fake.fills.pop(), fake.order_book.pop(), fake.placed.pop()  # not part of the position below
+    # Above it (an exit of 1,220 here), Kite slices it into orders of at most 1,000.
     asyncio.run(b.exit("SENSEX|2026-10-15|72300", 1))
     assert fake.calls[-2:] == ["place_autoslice_order", "place_autoslice_order"]
-    assert [p["quantity"] for p in fake.placed[-4:]] == [1000, 260, 1000, 260]
+    assert [p["quantity"] for p in fake.placed[-4:]] == [1000, 220, 1000, 220]
     asyncio.run(b.refresh())
     assert all(r["quantity"] == 0 for r in fake.positions()["net"])
 
 
 def test_banknifty_sells_its_monthly_straddle_and_slices_above_its_maximum(connected):
-    b, fake = connected(max_lots=60)
+    b, fake = connected()
     bank = date(2026, 10, 27)
     res = asyncio.run(b.sell("BANKNIFTY", bank, 56000, 1440))  # 48 lots: one order per leg
     assert [r["ok"] for r in res["results"]] == [True, True]
@@ -615,6 +623,8 @@ def test_login_redirect_and_callback(client):
     http.get("/kite/callback?status=cancelled", follow_redirects=False)
     assert b.message == ""  # no login pending: another site loading /callback is not reported
     state = http.get("/kite/login", follow_redirects=False).headers["location"].rsplit("state%3D", 1)[1]
+    http.get("/kite/callback?status=cancelled", follow_redirects=False)  # another site, mid-login
+    assert b.message == "" and state in b._login_states  # the login in progress goes on
     http.get(f"/kite/callback?status=cancelled&state={state}", follow_redirects=False)
     assert "cancelled" in b.message
     for _ in range(100):  # a page hitting /kite/login cannot grow the pending logins
@@ -650,7 +660,7 @@ def test_unconfigured_broker_explains_how_to_set_up(clock, files):
         asyncio.run(b.sell("NIFTY", NIFTY_EXPIRY, 22300, 65))
 
 
-def test_settings_come_from_env(monkeypatch):
+def test_settings_come_from_env(monkeypatch, caplog):
     for name in ("KITE_PRODUCT", "KITE_MAX_LOTS", "KITE_ORDER_RELAY", "KITE_RELAY_SECRET"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("KITE_API_KEY", "")  # as in .env until the keys are filled in
@@ -660,10 +670,14 @@ def test_settings_come_from_env(monkeypatch):
     monkeypatch.setenv("KITE_API_KEY", "key")
     monkeypatch.setenv("KITE_API_SECRET", "secret")
     b = kite.web.make_broker()
-    assert b.configured and (b.product, b.max_lots) == ("NRML", 20)
+    assert b.configured and b.product == "NRML"
     monkeypatch.setenv("KITE_PRODUCT", "mis")
+    assert kite.web.make_broker().product == "MIS"
+    # The old lot limit is gone (sells are capped at twice the algo's default): said, not fatal.
     monkeypatch.setenv("KITE_MAX_LOTS", "5")
-    assert (kite.web.make_broker().product, kite.web.make_broker().max_lots) == ("MIS", 5)
+    assert kite.web.make_broker().configured
+    assert "KITE_MAX_LOTS in .env is no longer used" in caplog.text
+    assert "NIFTY 3,380, BANKNIFTY 1,440, SENSEX 960" in caplog.text
     monkeypatch.setenv("KITE_PRODUCT", "CNC")
     with pytest.raises(RuntimeError, match="NRML or MIS"):
         kite.web.make_broker()

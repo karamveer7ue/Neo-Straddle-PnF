@@ -1,6 +1,7 @@
 # Kite trading
 
 Sell a straddle from any chart on the live P&F page, and track and exit it, through your Zerodha Kite account ([Kite Connect API](https://kite.trade/docs/pykiteconnect/v4/)).
+The [algo](../README.md#algo-trading) places its live orders through the same connection (see [The algo's orders](#the-algos-orders)).
 Charts and prices still come from Kotak Neo; Kite is used only to place orders and read your positions.
 
 ## What it adds to the page
@@ -15,7 +16,7 @@ Charts and prices still come from Kotak Neo; Kite is used only to place orders a
 - **Under the top bar:** one card per straddle traded from here, with its quantity, the straddle price sold at and now, and the P&L, plus the total.
   A straddle closed today stays listed (muted, "Closed") with its booked P&L until the next day.
   A position on a strike that is no longer on screen (e.g. after the ATM moved, or on another expiry) gets its own Exit buttons on its card, so it can always be closed from the page.
-- **In the top bar:** **Connect Kite**, or **Kite AB1234** once connected (click it to disconnect).
+- **In the top bar:** **Connect Kite**, or **TradeOn** once connected (click it to disconnect).
 
 Every error toast (an order not placed, rejected or left working) is also saved in the alert log next to the bell, so it can be read later.
 Each order's outcome appears as a toast: "Sold NIFTY 22,300 (13 Oct) straddle - CE 650 @ 100.80 · PE 650 @ 51.20", or the rejection reason from Kite (e.g. insufficient margin).
@@ -47,9 +48,7 @@ Optional settings in `.env`:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `KITE_PRODUCT` | `NRML` | `NRML` carries positions overnight until you exit; `MIS` is intraday (Zerodha squares it off before the close). |
-| `KITE_MAX_LOTS` | `20` | The largest sell per click, in lots, as a guard against a mistyped quantity. |
-
+| `KITE_PRODUCT` | `NRML` | The Sell buttons' product: `NRML` carries positions overnight until you exit; `MIS` is intraday (Zerodha squares it off before the close). The algo always uses `MIS`. |
 | `KITE_ORDER_RELAY` | empty | The relay's URL, e.g. `https://your-domain.example/kite-route.php`; empty sends orders straight to Kite. |
 | `KITE_RELAY_SECRET` | empty | The secret shared with the relay (64 random hex characters). |
 
@@ -115,6 +114,8 @@ Each order takes one extra hop (this machine -> the host -> Kite), typically 50 
 
 - **Quantity** is in units and must be a multiple of the contract's lot size (65 for NIFTY, 30 for BANKNIFTY, 20 for SENSEX at the time of writing; the page reads it from Kite's contract list for each expiry and shows the lot count next to the field).
   The field starts at the last quantity you sold on that index, or one lot.
+- **Size cap:** a sell is at most twice the algo's default quantity for its index: 3,380 for NIFTY, 1,440 for BANKNIFTY, 960 for SENSEX (`max_sell_qty` in `pnf/series.py` `UNDERLYINGS`), as a guard against a mistyped quantity.
+  A larger quantity is refused before anything is sent, by the page and again by the server; the cap applies to the algo too.
 - **Orders** are MARKET orders with Kite's automatic market protection (`market_protection=-1`, required for API market orders since April 2026), DAY validity, tagged `pnf` (visible in Kite's order book).
   An order is a single order up to the exchange's maximum quantity per order (the freeze quantity: 3,510 for NIFTY, 1,440 for BANKNIFTY, 1,000 for SENSEX); above it, Kite splits it into orders of at most that size (autoslice).
   Kite refuses to slice anything smaller ("Quantity should be greater than or equal to 1000 for order slicing"), so slicing is asked for only when needed.
@@ -141,6 +142,22 @@ Each order takes one extra hop (this machine -> the host -> Kite), typically 50 
   Brokerage and taxes are not included.
 - Positions on the same contracts taken elsewhere (e.g. in the Kite app) are netted by Kite into the same position, and Exit closes them too.
 
+## The algo's orders
+
+In Live mode the [algo](../README.md#algo-trading) trades through this connection, with the same order rules as the Sell buttons (market orders with market protection, the size cap, slicing above the freeze quantity, never resending an order whose outcome is unknown), and these differences:
+
+- **Product:** always `MIS`, whatever `KITE_PRODUCT` says, so Zerodha squares its positions off at 15:26 if the app cannot.
+  Kite keeps MIS and NRML positions on the same contract apart.
+- **Tag:** each trade's orders carry their own tag in Kite's order book, `pnfalgo001` for the day's first algo trade, `pnfalgo002` for the next, and so on.
+  Every order in Kite's order book with a trade's tag counts as that trade's, so an order whose reply was lost, or that went out just before a restart, is still found.
+  One Kite has not listed 15 seconds on counts as not placed (and is taken in after all should Kite list it later).
+- **Buy-backs** are sized from a fresh read of the order book and positions (re-read while the positions lag the order book), and never exceed the MIS position Kite shows short minus the MIS buys still working, so a leg can never turn long.
+- **Cancelling:** an entry leg still unfilled after 10 seconds is cancelled (the entry has then failed, and whatever was sold is bought back); an exit unfilled after 10 seconds is cancelled and sent again.
+  A cancel Kite does not act on is sent again 10 seconds later; an exit Kite rejects is sent again after a pause that doubles each time (5 seconds up to a minute).
+- **Following:** the algo reads its orders' progress from the broker's regular refreshes (every half second while one of its orders is working).
+  Its positions show in the positions strip and on the charts like any other, and Exit 50% / Exit Full act on them too.
+  The algo counts a position as bought back outside it only when Kite's positions show it on two refreshes in a row and a filled MIS buy order that is not the algo's (an Exit button, the Kite app, Zerodha's square-off) explains it; then it manages only what is left.
+
 ## Files
 
 | Path | Purpose |
@@ -148,7 +165,7 @@ Each order takes one extra hop (this machine -> the host -> Kite), typically 50 
 | `kite/gateway.py` | Async wrapper over the blocking `kiteconnect` SDK: one call at a time, retries for reads, order placement that is never resent after an uncertain failure. |
 | `kite/contracts.py` | Kite's index-option contracts (from the instrument dump, loaded once a day) by underlying, expiry, strike and CE/PE. |
 | `kite/book.py` | Pure helpers: straddle groups from positions and orders, and exit sizing. |
-| `kite/broker.py` | Session (login, saved token), sell and exit, polling, the journal, order outcomes. |
+| `kite/broker.py` | Session (login, saved token), sell and exit, polling, the journal, order outcomes, and the algo's orders (`algo_sell`, `algo_buy_back`, `cancel`). |
 | `kite/web.py` | The endpoints (`/kite/login`, `/callback`, `/api/kite/sell`, `/api/kite/exit`, `/api/kite/logout`, `/kite/ws`) and the static files, added to the P&F app by `install()`. |
 | `kite/static/trading.js`, `trading.css` | The trading UI on the page. |
 | `kite/static/positions.js` | P&L and quantity checks (no DOM; unit-tested in Node). |

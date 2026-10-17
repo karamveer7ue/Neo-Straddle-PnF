@@ -93,6 +93,9 @@ export class PnfPanel {
     this.dayMarks = [];
     this.cellOverride = null;
     this.overlays = { vwap: true, vwma: true };
+    // The algo's marks (algo/static/algo.js): lines at an open trade's entry, targets and
+    // stop, and points where a trade sold and bought back.
+    this.marks = { lines: [], points: [] };
     this.cell = 12; // box width (CSS px)
     this.rowScale = 1; // box height / width, set by dragging the price axis
     this.rowH = 12; // box height (CSS px)
@@ -207,6 +210,17 @@ export class PnfPanel {
 
   setOverlays(overlays) {
     this.overlays = { ...overlays };
+    this.render();
+  }
+
+  /**
+   * @param {{lines?: Array<{price: number, kind: 'entry'|'target'|'stop', label: string}>,
+   *          points?: Array<{ts: number, price: number, kind: 'sell'|'buy'}>}} marks
+   */
+  setMarks({ lines = [], points = [] } = {}) {
+    const same = JSON.stringify({ lines, points }) === JSON.stringify(this.marks);
+    if (same) return;
+    this.marks = { lines, points };
     this.render();
   }
 
@@ -557,6 +571,8 @@ export class PnfPanel {
       ctx.stroke();
     }
 
+    this.drawMarks(chartW);
+
     // Current price line
     const current = this.live?.price ?? this.series[this.series.length - 1]?.[1];
     const currentY = current === undefined ? null : this.priceY(current);
@@ -582,6 +598,9 @@ export class PnfPanel {
     }
     const vwma = this.currentVwma;
     if (this.overlays.vwma && vwma !== null) tags.push({ y: this.priceY(vwma), value: vwma, bg: t.vwma, fg: t.vwmaText });
+    for (const line of this.marks.lines) {
+      tags.push({ y: this.priceY(line.price), value: line.price, bg: this.markColor(line.kind), fg: t.bg });
+    }
     this.drawAxis(chartW, firstRow, lastRow, labelStep, tags, hit);
     // Only the hovered panel drives the shared tooltip; the others redrawing on a tick
     // must not hide it (mouseleave clears it when the pointer goes).
@@ -590,6 +609,84 @@ export class PnfPanel {
 
   priceY(price) {
     return HEADER + (this.topRow - this.pnf.rowOf(price)) * this.rowH - this.scroller.scrollTop + this.rowH / 2;
+  }
+
+  /** The column that was current when the bar at `ts` closed (-1 before the first). */
+  colOf(ts) {
+    const cols = this.pnf?.columns ?? [];
+    let lo = 0;
+    let hi = cols.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (cols[mid].startTs <= ts) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return found;
+  }
+
+  markColor(kind) {
+    return kind === 'target' ? theme.x : kind === 'stop' ? theme.o : theme.text;
+  }
+
+  /** The algo's lines (dashed, labelled at the axis end) and its sell / buy-back points. */
+  drawMarks(chartW) {
+    const { ctx } = this;
+    const t = theme;
+    const { lines, points } = this.marks;
+    if (!lines.length && !points.length) return;
+    ctx.save();
+    ctx.font = `650 10px ${t.font}`;
+    ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 1.25;
+    const labels = []; // baselines taken, so close lines never overprint their labels
+    for (const line of lines) {
+      const color = this.markColor(line.kind);
+      const y = Math.round(this.priceY(line.price)) + 0.5;
+      ctx.strokeStyle = color;
+      ctx.setLineDash(line.kind === 'target' ? [2, 3] : [6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(chartW, y);
+      ctx.stroke();
+      if (!line.label) continue;
+      // Above its line; below it when that spot is taken; none at all when both are (the
+      // axis tag still shows the value).
+      const free = (b) => labels.every((other) => Math.abs(other - b) >= 11);
+      const at = [y - 2, y + 12].find(free);
+      if (at === undefined) continue;
+      labels.push(at);
+      ctx.fillStyle = color;
+      ctx.fillText(line.label, chartW - ctx.measureText(line.label).width - 6, at);
+    }
+    ctx.setLineDash([]);
+    // A sell points down at its price from above; a buy-back points up at it from below.
+    const c = this.cell;
+    const size = Math.max(3.5, Math.min(6, Math.min(c, this.rowH) * 0.42));
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = t.bg;
+    for (const p of points) {
+      const col = this.colOf(p.ts);
+      if (col < 0) continue;
+      const x = this.colX(col) + c / 2;
+      if (x < -size || x > chartW + size) continue;
+      const y = this.priceY(p.price);
+      const dir = p.kind === 'sell' ? -1 : 1;
+      ctx.fillStyle = p.kind === 'sell' ? t.o : t.x;
+      ctx.beginPath();
+      ctx.moveTo(x - size, y + dir * size * 2);
+      ctx.lineTo(x + size, y + dir * size * 2);
+      ctx.lineTo(x, y + dir * size * 0.35);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   drawDateStrip(chartW) {

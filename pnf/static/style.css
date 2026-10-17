@@ -119,6 +119,14 @@ button, input, select { font: inherit; color: inherit; }
 .index-select:focus-visible { border-color: var(--accent); }
 .index-select option { color: var(--text-1); font-weight: 500; }
 
+/* Locked controls (e.g. the charts' index, expiry, ATM and days while the algo trades them). */
+.index-select:disabled, .field:has(:disabled), .chip:disabled, .view-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.field:has(:disabled) :disabled { cursor: not-allowed; }
+.index-select:disabled:hover, .chip:disabled:hover, .view-select:disabled:hover { border-color: var(--border); }
+
 /* Segmented switch (the simulator's speeds) */
 .segmented {
   display: inline-flex;

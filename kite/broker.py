@@ -15,6 +15,9 @@ from this app, and the browser connections it pushes position updates to.
 - tracking: positions and orders are polled; only contracts in the journal
   (those ordered from here) are shown. Orders just placed are watched until
   they complete or are rejected, and each outcome is pushed to the browsers.
+- the algo (algo/live.py) sells and buys back through algo_sell and
+  algo_buy_back, as MIS and tagged per trade, and follows its orders through
+  the listeners called after every refresh.
 """
 
 import asyncio
@@ -29,19 +32,21 @@ from pathlib import Path
 from pnf.series import IST, UNDERLYINGS, now_ist
 
 from .book import (
+    BUY,
     SELL,
     OrderRequest,
     contract_from_json,
     contract_to_json,
     group_json,
     is_working,
+    pending_quantity,
     plan_exit,
     position_rows,
     positions_behind,
     straddles,
     working_entries,
 )
-from .contracts import ContractBook, kite_exchange
+from .contracts import Contract, ContractBook, group_key, kite_exchange
 from .gateway import KiteError, KiteGateway, OutcomeUnknown, SessionExpired
 
 log = logging.getLogger(__name__)
@@ -52,7 +57,9 @@ JOURNAL_FILE = ROOT / ".kite-journal.json"
 
 ORDER_TAG = "pnf"  # shown on the orders in Kite, so they can be told apart there
 DEFAULT_PRODUCT = "NRML"
-DEFAULT_MAX_LOTS = 20
+# The algo's trades are intraday: if the app cannot exit them, Zerodha squares them off at
+# 15:26, and Kite keeps them apart from NRML positions taken with the Sell buttons.
+ALGO_PRODUCT = "MIS"
 POLL_MARKET = 2.0  # seconds between position refreshes in market hours
 POLL_IDLE = 60.0  # ... and outside them
 POLL_WATCHING = 0.5  # while an order just placed has not completed
@@ -80,14 +87,23 @@ def in_market_hours(now: datetime) -> bool:
     return now.weekday() < 5 and MARKET_HOURS[0] <= now.time() <= MARKET_HOURS[1]
 
 
+def check_size(underlying: str, quantity: int) -> None:
+    """Every sell from this app (a Sell button or the algo) is capped at twice the algo's
+    default quantity, a guard against a mistyped quantity."""
+    cap = UNDERLYINGS[underlying].max_sell_qty
+    if quantity > cap:
+        raise KiteError(
+            f"{quantity:,} is above the {cap:,} limit for {underlying} "
+            "(twice the algo's default quantity); nothing was sent."
+        )
+
+
 class KiteBroker:
-    def __init__(
-        self, gateway: KiteGateway | None, product: str = DEFAULT_PRODUCT, max_lots: int = DEFAULT_MAX_LOTS
-    ):
+    def __init__(self, gateway: KiteGateway | None, product: str = DEFAULT_PRODUCT):
         self.gw = gateway  # None: Kite is not set up in .env
         self.product = product
-        self.max_lots = max_lots
         self.clients: set[asyncio.Queue] = set()
+        self.listeners: list = []  # called with no arguments after every refresh (the algo)
 
         self.user: dict | None = None  # {"id", "name"} while logged in
         self.message = ""  # why trading is unavailable (e.g. the session expired)
@@ -180,16 +196,13 @@ class KiteBroker:
         return self.gw.login_url(state)
 
     def cancel_login(self, state: str) -> bool:
-        """Forget a login Kite reports as cancelled or failed. False when no login of
-        ours was pending (e.g. another site loading /callback): that goes unreported.
-        A reply without a state ends every pending login."""
-        now = clock.monotonic()
-        if state:
-            started = self._login_states.pop(state, None)
-            return started is not None and now - started <= LOGIN_STATE_TTL
-        pending = any(now - t <= LOGIN_STATE_TTL for t in self._login_states.values())
-        self._login_states = {}
-        return pending
+        """Forget a login Kite reports as cancelled or failed. False when it is not a login
+        of ours (no state, or one we did not start: another site loading /callback must
+        not end a login in progress), and that goes unreported."""
+        if not state:
+            return False
+        started = self._login_states.pop(state, None)
+        return started is not None and clock.monotonic() - started <= LOGIN_STATE_TTL
 
     async def complete_login(self, request_token: str, state: str) -> None:
         """Finish the redirect flow. Raises KiteError with a message for the page."""
@@ -257,7 +270,7 @@ class KiteBroker:
             "user": self.user,
             "message": self.message or self.book_error,
             "product": self.product,
-            "maxLots": self.max_lots,
+            "maxQty": {key: u.max_sell_qty for key, u in UNDERLYINGS.items()},
             "lotSizes": self.book.lot_sizes() if self.book else {},
             "groups": self.groups_json(),
             "updatedAt": self.updated_at,
@@ -410,6 +423,11 @@ class KiteBroker:
         self.updated_at = clock.time()
         self._prune_journal()
         self._report_outcomes()
+        for listener in list(self.listeners):
+            try:
+                listener()
+            except Exception:  # a listener's fault must not stop the refreshes
+                log.exception("Kite refresh listener failed")
         self._publish()
 
     def _report_outcomes(self) -> None:
@@ -433,6 +451,7 @@ class KiteBroker:
                         "filled": int(o.get("filled_quantity") or 0),
                         "averagePrice": float(o.get("average_price") or 0),
                         "message": o.get("status_message") or "",
+                        "algo": w.get("algo", False),  # the algo reports its own orders
                     }
                 )
             elif now - w["since"] > WATCH_TIMEOUT:
@@ -455,7 +474,7 @@ class KiteBroker:
     def _lock(self, key: str) -> asyncio.Lock:
         return self._group_locks.setdefault(key, asyncio.Lock())
 
-    async def _place(self, req: OrderRequest, group: str) -> dict:
+    async def _place(self, req: OrderRequest, group: str, tag: str = ORDER_TAG, algo: bool = False) -> dict:
         """Place one leg's order; returns a result line for the browser (never raises)."""
         c = req.contract
         result = {
@@ -472,7 +491,7 @@ class KiteBroker:
                 side=req.side,
                 quantity=req.quantity,
                 product=req.product,
-                tag=ORDER_TAG,
+                tag=tag,
                 max_quantity=UNDERLYINGS[c.underlying].max_order_qty,
             )
         except SessionExpired as exc:  # nothing was placed for this leg; the caller stops here
@@ -488,7 +507,12 @@ class KiteBroker:
         order_ids = [s["order_id"] for s in slices if "order_id" in s]
         errors = [s["error"] for s in slices if "error" in s]
         for order_id in order_ids:
-            self._watched[order_id] = {"since": clock.monotonic(), "kind": c.kind, "group": group}
+            self._watched[order_id] = {
+                "since": clock.monotonic(),
+                "kind": c.kind,
+                "group": group,
+                "algo": algo,
+            }
         log.info(
             "%s %s %d (%s): orders %s %s",
             req.side,
@@ -509,16 +533,18 @@ class KiteBroker:
         lot = pair[0].lot_size
         if quantity <= 0 or quantity % lot:
             raise KiteError(f"Quantity must be a multiple of the lot size, {lot}.")
-        if quantity > self.max_lots * lot:
-            raise KiteError(
-                f"{quantity} is above the {self.max_lots}-lot limit ({self.max_lots * lot}); "
-                "raise KITE_MAX_LOTS in .env to allow more."
-            )
-        key = f"{underlying}|{expiry.isoformat()}|{strike}"
+        check_size(underlying, quantity)
+        key = group_key(underlying, expiry, strike)
+        results = await self._sell_straddle(pair, key, quantity, self.product)
+        return {"group": key, "results": results, "warnings": []}
+
+    async def _sell_straddle(
+        self, pair: tuple[Contract, Contract], key: str, quantity: int, product: str, **place
+    ) -> list[dict]:
         ce, pe = pair
         async with self._lock(key):
             self._track(pair)  # before placing: an order with an unknown outcome is still tracked
-            first = await self._place(OrderRequest(ce, SELL, quantity, self.product), key)
+            first = await self._place(OrderRequest(ce, SELL, quantity, product), key, **place)
             results = [first]
             # The PE follows without waiting for the CE to fill (entries are instant), but
             # not after the CE failed: that could leave a naked PE. A CE rejected later by
@@ -537,9 +563,9 @@ class KiteBroker:
                      "ok": False, "held": True, "error": f"PE not sent: {why}"}
                 )  # fmt: skip
             else:
-                results.append(await self._place(OrderRequest(pe, SELL, quantity, self.product), key))
+                results.append(await self._place(OrderRequest(pe, SELL, quantity, product), key, **place))
         self._after_orders(results)
-        return {"group": key, "results": results, "warnings": []}
+        return results
 
     async def exit(self, group: str, fraction: float) -> dict:
         """Buy back half (0.5) or all (1) of each open leg of a straddle traded here."""
@@ -592,6 +618,75 @@ class KiteBroker:
             log.info("Kite's order book or positions are behind the latest orders; reading again")
             await asyncio.sleep(REREAD_DELAY)
         raise KiteError("Kite has not caught up with the latest orders and fills - try again in a moment.")
+
+    # ---------------- The algo's orders (algo/live.py) ----------------
+
+    def straddle_of(self, underlying: str, expiry: date, strike: int) -> tuple[Contract, Contract] | None:
+        """Kite's CE and PE for a straddle; None until the contracts load, or if not listed."""
+        return self.book.straddle(underlying, expiry, strike) if self.book else None
+
+    def held(self, contract: Contract, product: str | None = None) -> int:
+        """Kite's net quantity on a contract, in one product or all: negative when short."""
+        return sum(
+            int(r.get("quantity") or 0)
+            for r in position_rows(self.net, contract)
+            if product is None or r.get("product") == product
+        )
+
+    async def algo_sell(
+        self, underlying: str, expiry: date, strike: int, quantity: int, tag: str
+    ) -> list[dict]:
+        """The algo's entry: `quantity` of the CE, then at once the PE, as MIS, tagged with
+        the trade's tag. The PE is held back if the CE was not placed cleanly."""
+        book = self._require_book()
+        pair = book.straddle(underlying, expiry, strike)
+        if not pair:
+            raise KiteError(f"Kite lists no {underlying} {strike} CE and PE for {expiry:%d %b %Y}.")
+        if quantity <= 0 or quantity % pair[0].lot_size:
+            raise KiteError(f"Quantity must be a multiple of the lot size, {pair[0].lot_size}.")
+        check_size(underlying, quantity)
+        key = group_key(underlying, expiry, strike)
+        return await self._sell_straddle(pair, key, quantity, ALGO_PRODUCT, tag=tag, algo=True)
+
+    async def algo_buy_back(self, key: str, wanted: list[tuple[Contract, int]], tag: str) -> list[dict]:
+        """Buy back up to the given units of each contract's MIS short position: never more
+        than Kite shows short and not already being bought back, so a leg can never turn
+        long. Sized from a consistent read of the order book and positions."""
+        self._require_session()
+        async with self._lock(key):
+            net, orders = await self._consistent_book([c for c, _ in wanted], key)
+            self.net, self.orders = net, orders
+            results = []
+            for contract, units in wanted:
+                short = -sum(
+                    int(r.get("quantity") or 0)
+                    for r in position_rows(net, contract)
+                    if r.get("product") == ALGO_PRODUCT
+                )
+                qty = min(units, short - pending_quantity(orders, contract, ALGO_PRODUCT, BUY))
+                if qty <= 0:
+                    results.append(
+                        {"kind": contract.kind, "side": BUY, "quantity": 0, "ok": True, "orderIds": []}
+                    )
+                    continue
+                results.append(
+                    await self._place(OrderRequest(contract, BUY, qty, ALGO_PRODUCT), key, tag=tag, algo=True)
+                )
+                if results[-1].get("sessionExpired"):
+                    break
+        self._after_orders(results)
+        return results
+
+    async def cancel(self, order_id: str) -> None:
+        """Cancel a working order; the next refresh shows how it ended."""
+        self._require_session()
+        try:
+            await self.gw.cancel_order(order_id)
+        except SessionExpired as exc:
+            self._session_expired(str(exc))
+            raise
+        finally:
+            self._wake.set()
 
     def _after_orders(self, results: list[dict]) -> None:
         if any(r.get("sessionExpired") for r in results):

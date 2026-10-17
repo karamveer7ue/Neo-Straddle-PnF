@@ -54,6 +54,10 @@ def test_requests_from_other_sites_or_hosts_are_refused(http):
     assert http.post("/act", headers={"origin": "https://evil.example"}).status_code == 403
     assert http.post("/act", headers={"origin": "https://127.0.0.1:8766"}).status_code == 403  # the simulator
     assert http.post("/act", headers={"origin": OWN}).status_code == 200
+    # The Host is quoted in the CSP: only a plain loopback host and port pass.
+    bad_host = "127.0.0.1:1; script-src * 'unsafe-inline'"
+    assert http.get("/page", headers={"host": bad_host}).status_code == 403
+    assert http.post("/act", headers={"origin": OWN.replace("https", "http")}).status_code == 403
     # A browser that says the request comes from another site is refused, whatever the Origin.
     assert http.post("/act", headers={"sec-fetch-site": "cross-site"}).status_code == 403
     assert http.post("/act", headers={"sec-fetch-site": "same-site"}).status_code == 403

@@ -58,12 +58,12 @@ test('one lot left cannot be halved; a closed group is not open', () => {
 });
 
 test('quantity must be whole lots within the limit', () => {
-  assert.deepEqual(checkQuantity(650, 65, 20), { ok: true, lots: 10 });
-  assert.match(checkQuantity(600, 65, 20).error, /multiple of the lot size, 65/);
-  assert.match(checkQuantity(65 * 21, 65, 20).error, /20-lot limit/);
-  assert.match(checkQuantity(0, 65, 20).error, /Enter a quantity/);
-  assert.match(checkQuantity(Number(''), 65, 20).error, /Enter a quantity/);
-  assert.match(checkQuantity(65, null, 20).error, /Lot size unknown/);
+  assert.deepEqual(checkQuantity(3380, 65, 3380), { ok: true, lots: 52 });
+  assert.match(checkQuantity(600, 65, 3380).error, /multiple of the lot size, 65/);
+  assert.equal(checkQuantity(3445, 65, 3380).error, 'Above the 3,380 limit (twice the algo default)');
+  assert.match(checkQuantity(0, 65, 3380).error, /Enter a quantity/);
+  assert.match(checkQuantity(Number(''), 65, 3380).error, /Enter a quantity/);
+  assert.match(checkQuantity(65, null, 3380).error, /Lot size unknown/);
 });
 
 test('formatting and keys', () => {

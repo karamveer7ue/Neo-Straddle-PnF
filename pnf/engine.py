@@ -56,6 +56,7 @@ DEFAULT_DAYS = 3
 LOOP_INTERVAL = 0.25  # seconds; also the live-tick push rate to browsers
 RECONCILE_EVERY_MIN = 5  # refresh today's official candles this often
 FEED_RECONNECT_DELAY = 5
+FEED_STALE_SECONDS = 30  # in session, a live feed silent this long has died without a close
 REBUILD_RETRY_DELAY = 60  # after a failed automatic rebuild
 FAILED_BUILD_RETRY = (60, 15 * 60)  # a build that failed (or lost a chart) is retried: first delay, cap
 CONFIG_FILE = Path(__file__).resolve().parent.parent / ".pnf-config.json"
@@ -174,10 +175,14 @@ class Engine:
         self.day_volume: dict[str, int] = {}  # leg key -> latest volume_traded_today
         self._volume_mark: dict[str, int] = {}  # leg key -> day volume at the last minute close
         self.feed_state = "offline"  # offline | connecting | live | reconnecting
+        self._feed_at = 0.0  # monotonic time of the last feed packet
         self.feed_message = ""
         self._tick_dirty = False
 
         self.alerts: list[dict] = self._load_alerts()  # newest first
+        # Told about each live minute close (on_minute_closed(minute, now)) and every clock
+        # tick (on_loop(now)): the algo (algo/runner.py).
+        self.listeners: list = []
 
         self._past_cache: dict[tuple[str, date, date], list[Candle]] = {}
         self._build_task: asyncio.Task | None = None
@@ -662,6 +667,7 @@ class Engine:
                     if tokens:  # full scrip packets carry the day volume that VWAP needs
                         await ws.subscribe_scrips(tokens)
                     await ws.subscribe_index([WsToken(u.index_segment, u.index_token)])
+                    self._feed_at = clock.monotonic()
                     self._set_feed("live")
                     async for message in ws:
                         self._on_feed(message)
@@ -679,6 +685,7 @@ class Engine:
             await asyncio.sleep(FEED_RECONNECT_DELAY)
 
     def _on_feed(self, message) -> None:
+        self._feed_at = clock.monotonic()  # any packet: the connection is alive
         if isinstance(message, (SFeedScrip, SFeedScripLite)):
             leg_key = f"{message.exchange_segment}|{message.instrument_token}"
             if message.last_traded_price > 0:
@@ -695,6 +702,20 @@ class Engine:
                 if message.close_price > 0:
                     self.spot_prev_close = message.close_price
                 self._tick_dirty = True
+
+    def _check_feed_stale(self, now: datetime) -> None:
+        """A connection that died without a close (the network gone, a NAT timeout) leaves
+        the SDK's iterator waiting for ever, with the feed looking live while every price
+        is stale. In session the index alone ticks every second, so a long silence means
+        the connection is dead: reconnect (the state shows it, and the algo alarms)."""
+        if (
+            self.feed_state == "live"
+            and in_session(now)
+            and clock.monotonic() - self._feed_at > FEED_STALE_SECONDS
+        ):
+            log.warning("No feed packet for %ss in session: reconnecting", FEED_STALE_SECONDS)
+            self._set_feed("reconnecting", "No data from the feed; reconnecting...")
+            self._start_feed()
 
     def _straddle_ltp(self, chart: Chart) -> float | None:
         if chart.error:
@@ -753,9 +774,17 @@ class Engine:
                 bar = (ts, price, self._minute_volume(chart))
                 chart.live.append(bar)
                 self._push({"type": "bar", "generation": self.generation, "key": chart.key, "bar": list(bar)})
+            self._notify("on_minute_closed", minute, now_ist())
         finally:
             # Every minute starts counting volume afresh, bar or not.
             self._volume_mark.update(self.day_volume)
+
+    def _notify(self, event: str, *args) -> None:
+        for listener in list(self.listeners):
+            try:
+                getattr(listener, event)(*args)
+            except Exception:  # a listener (the algo) must never stop the charts
+                log.exception("Engine listener %s failed", event)
 
     # ---------------- Clock ----------------
 
@@ -791,6 +820,8 @@ class Engine:
                             "live": self._live_json(),
                         }
                     )
+                self._check_feed_stale(now)
+                self._notify("on_loop", now)
 
                 building = self._build_task and not self._build_task.done()
                 if not building and self._retry_at is not None and clock.monotonic() >= self._retry_at:

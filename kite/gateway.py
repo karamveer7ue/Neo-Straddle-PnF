@@ -197,6 +197,33 @@ class KiteGateway:
                 raise OutcomeUnknown(_message(exc)) from exc
         raise AssertionError("unreachable")
 
+    async def cancel_order(self, order_id: str) -> None:
+        """Cancel a working regular order (through the order client, so the relay too).
+        Retried only on a 429; raises KiteError when Kite refuses (e.g. it already
+        completed) or the request fails - the next order book read tells what happened."""
+        delay = RETRY_DELAY
+        for attempt in range(ORDER_RETRIES_ON_429 + 1):
+            try:
+                await self._run(
+                    self.order_client.cancel_order,
+                    KiteConnect.VARIETY_REGULAR,
+                    order_id,
+                    _lock=self._order_lock,
+                )
+                return
+            except kex.TokenException as exc:
+                raise SessionExpired(_message(exc)) from exc
+            except kex.KiteException as exc:
+                if exc.code == 429 and attempt < ORDER_RETRIES_ON_429:
+                    log.warning("Cancelling order %s rate limited, retrying in %.0fs", order_id, delay)
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                    continue
+                raise KiteError(_message(exc)) from exc
+            except requests.RequestException as exc:
+                raise KiteError(_message(exc)) from exc
+        raise AssertionError("unreachable")
+
 
 def parse_slices(reply) -> list[dict]:
     """Normalise an order reply: a list with one {"order_id"} or {"error"} per order.
