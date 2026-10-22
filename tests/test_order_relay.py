@@ -82,7 +82,7 @@ class FakeKiteApi(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def php_relay(upstream: str):
+def php_relay(upstream: str, script: Path = RELAY):
     """The relay under PHP's built-in server, forwarding to `upstream`; yields its URL."""
     port = free_port()
     seen = Path(tempfile.mkdtemp()) / "seen.json"  # the used signatures: never next to the repo's copy
@@ -93,7 +93,7 @@ def php_relay(upstream: str):
         "PATH": "/usr/bin:/bin",
     }
     php = subprocess.Popen(
-        [PHP, "-S", f"127.0.0.1:{port}", str(RELAY)],
+        [PHP, "-S", f"127.0.0.1:{port}", str(script)],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -160,9 +160,30 @@ def test_orders_go_through_the_relay_and_reads_go_direct(relay):
 def test_a_wrong_secret_is_refused_and_nothing_reaches_kite(relay):
     relay_url, api_url, seen = relay
     kite = kite_client(api_url, relay_url, secret="x" * 40)
-    with pytest.raises(kex.PermissionException, match="bad signature"):
+    with pytest.raises(kex.PermissionException, match="probably older than this app"):
         kite.place_autoslice_order(**ORDER)
     assert seen == []
+    with pytest.raises(RuntimeError, match=r"RELAY_SECRET in the uploaded kite-route\.php differs"):
+        order_relay.whoami(relay_url, "x" * 40)
+
+
+def test_a_relay_older_than_the_app_is_told_apart_from_a_wrong_secret(tmp_path):
+    """The relay uploaded before the signature changed (2026-10-16) refuses every order
+    with "bad signature"; `check` must say to re-upload it, not blame the secret."""
+    old = tmp_path / "kite-route.php"
+    old.write_bytes(
+        subprocess.run(
+            ["git", "show", "6a6a929:kite/relay/kite-route.php"],
+            cwd=RELAY.parent,
+            capture_output=True,
+            check=True,
+        ).stdout
+    )
+    with php_relay(f"http://127.0.0.1:{free_port()}", script=old) as relay_url:
+        with pytest.raises(RuntimeError, match=r"older than this app \(the secret matches"):
+            order_relay.whoami(relay_url, SECRET)
+        with pytest.raises(RuntimeError, match=r"RELAY_SECRET in the uploaded kite-route\.php differs"):
+            order_relay.whoami(relay_url, "x" * 40)
 
 
 def test_an_old_request_cannot_be_replayed(relay, monkeypatch):
@@ -204,7 +225,7 @@ def test_forwarded_headers_cannot_be_changed(relay):
         order = signed_order(relay_url)
         order.headers[header] = value
         res = requests.Session().send(order, timeout=5)
-        assert res.status_code == 403 and "bad signature" in res.json()["message"], header
+        assert res.status_code == 403 and "refused the signature" in res.json()["message"], header
     assert seen == []
 
 

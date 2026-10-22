@@ -15,10 +15,11 @@ and a position can never be bought back past zero.
 
 The rules (README.md, Algo trading):
 - entry, at a 1-minute close: a double bottom sell confirmed by that bar, with
-  the close below VWAP and below VWMA 10; one trade per chart, Simultaneous
-  Trades at once, Max trades per day, nothing after Last entry;
-- exits, at a 1-minute close: the newest column is X with its top box above the
-  lower of VWAP and VWMA 10 (stop); the close at entry - target/3 books half
+  the close at least Below VWAP by points under VWAP, between First entry and
+  Last entry, on a weekday the index is traded (Days); one trade per chart,
+  Simultaneous Trades at once, Max trades per day;
+- exits, at a 1-minute close: the newest column is X with its top box above
+  VWAP (stop); the close at entry - target/3 books half
   (rounded up to whole lots) and adds a breakeven stop at the entry; the close at
   entry - target books the rest;
 - on the live price: Max loss per trade, and the Daily loss limit (which also
@@ -63,7 +64,7 @@ EXTERNAL = "external"
 DAY_END = "day_end"
 LATE = "late"
 REASONS = {
-    STOP: "Stop: an X above the lower of VWAP and VWMA 10",
+    STOP: "Stop: an X above VWAP",
     TARGET1: "First target",
     BREAKEVEN: "Breakeven stop",
     TARGET: "Full target",
@@ -80,6 +81,7 @@ REASONS = {
 
 EXTERNAL_ID = "external-"  # the orders standing for buy-backs made outside the algo
 
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
 EARLIEST = time(9, 15)
 LATEST_EXIT = time(15, 25)  # before Zerodha squares off intraday (MIS) F&O positions at 15:26
 EPS = 1e-9  # price comparisons: closes and levels are in paise
@@ -129,6 +131,10 @@ def chart_label(offset: int) -> str:
     return "ATM" if offset == 0 else f"ATM {'+' if offset > 0 else MINUS} {abs(offset)}"
 
 
+def weekday_name(moment: datetime) -> str:
+    return WEEKDAYS[moment.weekday()] if moment.weekday() < 5 else moment.strftime("%A")
+
+
 def parse_hhmm(text: str) -> time:
     m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", str(text).strip())
     if not m:
@@ -147,23 +153,35 @@ def _default_target() -> dict[str, float]:
     return {k: float(u.algo_target) for k, u in UNDERLYINGS.items()}
 
 
+def _default_days() -> dict[str, list[int]]:
+    return {k: list(u.algo_days) for k, u in UNDERLYINGS.items()}
+
+
+def _default_below_vwap() -> dict[str, float]:
+    return {k: float(u.algo_below_vwap) for k, u in UNDERLYINGS.items()}
+
+
 @dataclass
 class Settings:
-    """What the Algo menu sets. Quantity and Target Points are per index."""
+    """What the Algo menu sets. Quantity, Target Points, Below VWAP by and Days are per index."""
 
     mode: str = PAPER
     max_open: int = 1  # Simultaneous Trades, across the three charts
-    last_entry: str = "14:45"
+    first_entry: str = "09:10"  # entries from this close on ...
+    last_entry: str = "14:45"  # ... and before this one
     exit_time: str = "15:12"
     max_loss: int = 100_000  # rupees, per trade
     daily_loss: int = 100_000  # rupees, all of the day's algo trades
     max_trades: int = 5  # entries per day
     qty: dict[str, int] = field(default_factory=_default_qty)
     target: dict[str, float] = field(default_factory=_default_target)
+    days: dict[str, list[int]] = field(default_factory=_default_days)  # weekdays, Monday = 0
+    below_vwap: dict[str, float] = field(default_factory=_default_below_vwap)  # points under VWAP
 
     JSON_NAMES: ClassVar[dict[str, str]] = {
         "mode": "mode",
         "maxOpen": "max_open",
+        "firstEntry": "first_entry",
         "lastEntry": "last_entry",
         "exitTime": "exit_time",
         "maxLoss": "max_loss",
@@ -171,7 +189,13 @@ class Settings:
         "maxTrades": "max_trades",
         "qty": "qty",
         "target": "target",
+        "days": "days",
+        "belowVwap": "below_vwap",
     }
+
+    @property
+    def first_entry_at(self) -> time:
+        return parse_hhmm(self.first_entry)
 
     @property
     def last_entry_at(self) -> time:
@@ -181,6 +205,10 @@ class Settings:
     def exit_at(self) -> time:
         return parse_hhmm(self.exit_time)
 
+    def trades_on(self, underlying: str, day: date) -> bool:
+        """Whether the algo takes trades on `underlying` that weekday."""
+        return day.weekday() in self.days.get(underlying, [])
+
     def to_json(self) -> dict:
         return {name: getattr(self, attr) for name, attr in self.JSON_NAMES.items()}
 
@@ -189,11 +217,13 @@ class Settings:
         errors: dict[str, str] = {}
         values = {attr: getattr(self, attr) for attr in self.JSON_NAMES.values()}
         values["qty"], values["target"] = dict(self.qty), dict(self.target)
+        values["days"] = {k: list(v) for k, v in self.days.items()}
+        values["below_vwap"] = dict(self.below_vwap)
         for name, value in changes.items():
             attr = self.JSON_NAMES.get(name)
             if attr is None:
                 errors[name] = f"Unknown setting {name!r}"
-            elif attr in ("qty", "target"):
+            elif attr in ("qty", "target", "days", "below_vwap"):
                 if not isinstance(value, dict):
                     errors[name] = "Expected a value per index"
                     continue
@@ -202,8 +232,12 @@ class Settings:
                         errors[f"{name}.{key}"] = f"Unknown index {key!r}"
                     elif attr == "qty":
                         values["qty"][key] = _whole(v, errors, f"qty.{key}")
-                    else:
+                    elif attr == "target":
                         values["target"][key] = _points(v, errors, f"target.{key}")
+                    elif attr == "below_vwap":
+                        values["below_vwap"][key] = _points(v, errors, f"belowVwap.{key}")
+                    else:
+                        values["days"][key] = _weekdays(v, errors, f"days.{key}")
             elif attr in ("max_open", "max_loss", "daily_loss", "max_trades"):
                 values[attr] = _whole(value, errors, name)
             else:
@@ -225,18 +259,26 @@ class Settings:
         if not 1 <= self.max_open <= 3:
             errors["maxOpen"] = "Simultaneous Trades is 1, 2 or 3 (one per chart)"
         times = {}
-        for name, attr in (("lastEntry", "last_entry"), ("exitTime", "exit_time")):
+        for name, attr in (
+            ("firstEntry", "first_entry"),
+            ("lastEntry", "last_entry"),
+            ("exitTime", "exit_time"),
+        ):
             try:
                 times[name] = parse_hhmm(getattr(self, attr))
             except ValueError:
                 errors[name] = "Enter a time like 14:45"
-        exit_at, last = times.get("exitTime"), times.get("lastEntry")
+        exit_at, last, first = times.get("exitTime"), times.get("lastEntry"), times.get("firstEntry")
         if exit_at is not None and not EARLIEST < exit_at <= LATEST_EXIT:
             errors["exitTime"] = "Between 09:16 and 15:25 (Zerodha squares off intraday positions at 15:26)"
         if last is not None and not EARLIEST <= last <= LATEST_EXIT:
             errors["lastEntry"] = "Between 09:15 and 15:25"
         elif last is not None and exit_at is not None and last > exit_at:
             errors["lastEntry"] = "No later than the Exit Time"
+        if first is not None and not time(9, 0) <= first <= LATEST_EXIT:
+            errors["firstEntry"] = "Between 09:00 and 15:25"
+        elif first is not None and last is not None and first >= last:
+            errors["firstEntry"] = "Before the Last entry time"
         if not 1_000 <= self.max_loss <= 10_000_000:
             errors["maxLoss"] = "Between ₹1,000 and ₹1,00,00,000"
         if not 1_000 <= self.daily_loss <= 10_000_000:
@@ -249,6 +291,11 @@ class Settings:
                 errors[f"qty.{key}"] = problem
             if not 0.05 <= self.target.get(key, 0) <= 10_000:
                 errors[f"target.{key}"] = "Between 0.05 and 10,000 points"
+            days = self.days.get(key)
+            if not isinstance(days, list) or any(not isinstance(d, int) or not 0 <= d <= 4 for d in days):
+                errors[f"days.{key}"] = "Weekdays, Monday to Friday"
+            if not 0 <= self.below_vwap.get(key, -1) <= 10_000:
+                errors[f"belowVwap.{key}"] = "Between 0 and 10,000 points"
         return errors
 
     @classmethod
@@ -290,6 +337,16 @@ def _whole(value, errors: dict, name: str) -> int:
     return int(value)
 
 
+def _weekdays(value, errors: dict, name: str) -> list[int]:
+    """A list of weekdays (Monday = 0 to Friday = 4), each at most once, in order."""
+    if not isinstance(value, list) or any(
+        isinstance(d, bool) or not isinstance(d, int) or not 0 <= d <= 4 for d in value
+    ):
+        errors[name] = "Weekdays, Monday to Friday"
+        return []
+    return sorted(set(value))
+
+
 def _points(value, errors: dict, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         errors[name] = "Enter a number of points"
@@ -329,37 +386,33 @@ class Candidate:
     level: float  # the broken bottom (price)
     close: float
     vwap: float | None
-    vwma: float | None
+    margin: float = 0.0  # Below VWAP by: points the close must be under VWAP
 
     @property
     def below_vwap(self) -> bool:
+        """Below VWAP at all: the chart's alert test (what the user sees)."""
         return self.vwap is not None and self.close < self.vwap
 
     @property
-    def below_vwma(self) -> bool:
-        return self.vwma is not None and self.close < self.vwma
-
-    @property
     def qualifies(self) -> bool:
-        return self.below_vwap and self.below_vwma
+        return self.vwap is not None and self.close < self.vwap - self.margin + EPS
 
 
-def entry_candidate(tip: Tip, bar) -> Candidate | None:
-    """The double bottom sell the bar just closed confirmed, with its VWAP and VWMA 10."""
+def entry_candidate(tip: Tip, bar, margin: float = 0.0) -> Candidate | None:
+    """The double bottom sell the bar just closed confirmed, with the VWAP then."""
     if tip is None or tip.sell is None:
         return None
     col, level = tip.sell
-    return Candidate(col, level, bar[1], tip.vwap, tip.vwma)
+    return Candidate(col, level, bar[1], tip.vwap, margin)
 
 
 def stop_level(tip: Tip) -> float | None:
-    """The lower of VWAP and VWMA 10 at the newest column (either alone when the other is unknown)."""
-    known = [v for v in (tip.vwap, tip.vwma) if v is not None]
-    return min(known) if known else None
+    """VWAP at the newest column (VWMA 10 was dropped from the rules by the user)."""
+    return tip.vwap
 
 
 def stop_hit(tip: Tip) -> bool:
-    """The newest column is X and its top box is above the lower of VWAP and VWMA 10."""
+    """The newest column is X and its top box is above VWAP."""
     level = stop_level(tip)
     return tip.dir == "X" and level is not None and tip.top > level + EPS
 
@@ -919,18 +972,15 @@ class AlgoCore:
         for view in sorted(views, key=chart_priority):
             if view.bar is None or view.tip is None:
                 continue
-            c = entry_candidate(view.tip, view.bar)
-            if c is None:
-                continue
+            margin = self.settings.below_vwap[view.underlying]
+            c = entry_candidate(view.tip, view.bar, margin)
+            if c is None or not c.below_vwap:
+                continue  # at or above VWAP: the chart raised no alert for it either
             name = f"{view.underlying} {inr(view.strike)} {chart_label(view.offset)}"
-            if not c.qualifies:
-                if c.below_vwap:  # it raised an alert, so say why it was not traded
-                    why = (
-                        f"the close {fmt_price(c.close)} is not below VWMA 10 ({fmt_price(c.vwma)})"
-                        if c.vwma is not None
-                        else "VWMA 10 is not known yet"
-                    )
-                    self._event("skipped", now, f"Algo did not trade a double bottom sell: {name}", why)
+            if not c.qualifies:  # it raised an alert, so say why it was not traded
+                vwap = fmt_price(c.vwap)
+                why = f"the close {fmt_price(c.close)} is not {margin:g} points below VWAP ({vwap})"
+                self._event("skipped", now, f"Algo did not trade a double bottom sell: {name}", why)
                 continue
             why = self._entry_block(now, view)
             if why:
@@ -941,9 +991,13 @@ class AlgoCore:
 
     def _entry_block(self, now: datetime, view: ChartView) -> str:
         s = self.settings
+        if not s.trades_on(view.underlying, now.date()):
+            return f"{view.underlying} is not traded on {WEEKDAYS[now.weekday()]}s"
         close_minute = now.replace(second=0, microsecond=0).time()
-        if close_minute > s.last_entry_at:
-            return f"after the Last entry time ({s.last_entry})"
+        if close_minute < s.first_entry_at:
+            return f"before the First entry time ({s.first_entry})"
+        if close_minute >= s.last_entry_at:
+            return f"not before the Last entry time ({s.last_entry})"
         if len(self.todays(self.on_mode)) >= s.max_trades:
             return f"Max trades per day ({s.max_trades}) reached"
         legs = (view.ce["key"], view.pe["key"])
@@ -964,7 +1018,6 @@ class AlgoCore:
     def _open(self, now: datetime, view: ChartView, c: Candidate) -> Trade:
         self.seq += 1
         u, s = view.underlying, self.settings
-        known = [v for v in (c.vwap, c.vwma) if v is not None]
         t = Trade(
             id=f"{self.day.isoformat()}-{self.seq}",
             seq=self.seq,
@@ -983,7 +1036,6 @@ class AlgoCore:
                 "ts": view.bar[0],
                 "close": c.close,
                 "vwap": c.vwap,
-                "vwma": c.vwma,
                 "level": round(c.level, 2),
             },
             opened_at=int(now.timestamp()),
@@ -992,8 +1044,7 @@ class AlgoCore:
                 "PE": Leg("PE", view.pe["key"], view.pe.get("symbol", "")),
             },
             want=s.qty[u],
-            # Its stop from the start: the lower of VWAP and VWMA 10 at the signal's close.
-            stop={"level": round(min(known), 2), "at": view.bar[0] + 60} if known else None,
+            stop={"level": round(c.vwap, 2), "at": view.bar[0] + 60},  # VWAP at the signal's close
         )
         self.trades.append(t)
         return t
@@ -1142,8 +1193,7 @@ class AlgoCore:
                 )
 
     def _report_open(self, t: Trade, now: datetime) -> None:
-        stop = t.signal.get("vwma"), t.signal.get("vwap")
-        level = min(v for v in stop if v is not None) if any(v is not None for v in stop) else None
+        level = t.signal.get("vwap")
         self._event(
             "opened",
             now,

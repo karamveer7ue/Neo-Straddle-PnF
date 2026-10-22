@@ -14,6 +14,7 @@ import {
   describeTrade,
   eventStyle,
   fmtClock,
+  fmtDays,
   fmtExpiry,
   fmtQty,
   fmtRupees,
@@ -26,6 +27,7 @@ import {
   switchLabel,
   tradePnl,
   tradesOn,
+  WEEKDAYS,
 } from './model.js';
 
 const REPEAT_GUARD_MS = 1000; // a second click within this is a double-click: ignored
@@ -35,7 +37,10 @@ const SOUND_HINT = 'Click anywhere on the page to enable alert sounds.';
 const FIELDS = [
   { name: 'qty', index: true, label: 'Quantity', input: 'numeric' },
   { name: 'target', index: true, label: 'Target Points', input: 'decimal' },
+  { name: 'belowVwap', index: true, label: 'Below VWAP by', input: 'decimal' },
+  { name: 'days', index: true, label: 'Days', input: 'days' },
   { name: 'maxOpen', label: 'Simultaneous Trades', options: [1, 2, 3] },
+  { name: 'firstEntry', label: 'First entry', input: 'time' },
   { name: 'lastEntry', label: 'Last entry', input: 'time' },
   { name: 'exitTime', label: 'Exit Time', input: 'time' },
   { name: 'maxLoss', label: 'Max loss per trade', input: 'rupees' },
@@ -128,6 +133,28 @@ export function createAlgoUI({ adapter, onLock = () => {} }) {
     const row = el('label', 'ap-field');
     row.dataset.name = f.name;
     let input;
+    if (f.input === 'days') {
+      // Five weekday toggles; a click saves the new set at once.
+      input = el('span', 'segmented ap-days');
+      input.setAttribute('role', 'group');
+      input.setAttribute('aria-label', 'Weekdays');
+      WEEKDAYS.forEach((name, d) => {
+        const b = el('button', null, name);
+        b.type = 'button';
+        b.dataset.day = String(d);
+        b.addEventListener('click', () => {
+          const current = currentValue(f) ?? [];
+          const next = current.includes(d) ? current.filter((x) => x !== d) : [...current, d].sort();
+          saveSetting(f.name, next, f);
+        });
+        input.append(b);
+      });
+      const hint = el('span', 'ap-hint');
+      row.append(el('span', 'ap-label', f.label), input, hint);
+      indexSection.append(row);
+      fields.set(f.name, { row, input, hint });
+      continue;
+    }
     if (f.options) {
       input = el('select', 'ap-select');
       for (const v of f.options) input.append(new Option(String(v), String(v)));
@@ -240,7 +267,9 @@ export function createAlgoUI({ adapter, onLock = () => {} }) {
     const s = ui.s;
     if (!s) return;
     let value = raw;
-    if (f) {
+    if (f?.input === 'days') {
+      if (JSON.stringify(value) === JSON.stringify(currentValue(f))) return;
+    } else if (f) {
       value = parseField(f, raw);
       if (Number.isNaN(value)) {
         ui.errors[f.name] = f.input === 'time' ? 'Enter a time like 14:45' : 'Enter a number';
@@ -438,7 +467,14 @@ export function createAlgoUI({ adapter, onLock = () => {} }) {
     indexTitle.textContent = `${u} (for new trades)`;
     for (const f of FIELDS) {
       const { row, input, hint } = fields.get(f.name);
-      if (document.activeElement !== input) input.value = valueOf(f);
+      if (f.input === 'days') {
+        const chosen = currentValue(f) ?? [];
+        for (const b of input.querySelectorAll('button')) {
+          b.setAttribute('aria-pressed', String(chosen.includes(Number(b.dataset.day))));
+        }
+      } else if (document.activeElement !== input) {
+        input.value = valueOf(f);
+      }
       let error = ui.errors[f.name] ?? '';
       if (!error && f.name === 'qty') error = qtyProblem(s.settings.qty[u], lot, s.caps[u]);
       row.classList.toggle('invalid', !!error);
@@ -464,10 +500,16 @@ export function createAlgoUI({ adapter, onLock = () => {} }) {
         return lot ? `${st.qty[u] / lot} lots × ${lot}, at most ${fmtQty(s.caps[u])}` : `at most ${fmtQty(s.caps[u])}`;
       case 'target':
         return `half booked at ${Math.round((st.target[u] / 3) * 100) / 100}`;
+      case 'belowVwap':
+        return 'points under VWAP at the close';
+      case 'days':
+        return `trades ${u} on ${fmtDays(st.days?.[u])}`;
+      case 'firstEntry':
+        return 'no trades before it';
       case 'maxOpen':
         return 'at once, one per chart';
       case 'lastEntry':
-        return 'no new trades after it';
+        return 'no trades from it on';
       case 'exitTime':
         return 'everything closed; Algo Off';
       case 'maxLoss':
@@ -482,7 +524,7 @@ export function createAlgoUI({ adapter, onLock = () => {} }) {
   function statusText(s) {
     const m = s.summary;
     const what = `${m.underlying} ${fmtExpiry(m.expiry)} · ${m.strikes.map((k) => k.toLocaleString('en-IN')).join(' / ')}`;
-    if (s.on) return `On: trading ${what} until ${s.settings.lastEntry}; everything closes at ${s.settings.exitTime}.`;
+    if (s.on) return `On: trading ${what} from ${s.settings.firstEntry} to ${s.settings.lastEntry}; everything closes at ${s.settings.exitTime}.`;
     if (s.halted) return `Stopped for today: ${s.halted}.`;
     if (s.exitTimeDone) return `Off for today: the Exit Time (${s.settings.exitTime}) has passed.`;
     if (s.startProblem) return s.startProblem;
@@ -581,7 +623,7 @@ export function createAlgoUI({ adapter, onLock = () => {} }) {
       } else if (s?.on && !p.def.error) {
         kind = 'watching';
         what = 'Watching';
-        levels = 'for a double bottom sell below VWAP and VWMA 10';
+        levels = `for a double bottom sell ${s.settings.belowVwap?.[s.summary.underlying] ?? ''} points below VWAP`;
       }
       parts.row.hidden = !kind;
       parts.row.dataset.kind = kind;

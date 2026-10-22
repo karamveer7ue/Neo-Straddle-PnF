@@ -165,6 +165,8 @@
 
 .ap-box i { padding-left: 8px; color: var(--text-3); font-style: normal; font-size: 12px; }
 .ap-box:focus-within { border-color: var(--accent); }
+.ap-days { grid-area: box; height: 26px; justify-self: start; }
+.ap-days button { padding: 0 5px; font-size: 11px; min-width: 0; }
 
 .ap-input {
   flex: 1;

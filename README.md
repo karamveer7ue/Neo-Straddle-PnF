@@ -43,7 +43,7 @@ A separate [simulator](#simulator) replays past sessions on the same charts at 1
 - **Signals:** double top buy and double bottom sell are marked on the charts.
   A new double bottom sell with the straddle below its VWAP raises a toast, a panel flash, a chime and (when the tab is in the background) a system notification; double top buys, and sells at or above VWAP, are marked only.
 - **Trading through Kite (optional):** a quantity field and Sell button under each chart, live P&L for the positions taken, and Exit 50% / Exit Full on the charts holding one.
-- **Algo trading (optional):** sells a chart's straddle by itself on a double bottom sell below VWAP and VWMA 10, books half at a third of the target and the rest at the target, gets out on an X above VWAP or VWMA 10, and closes everything at a set time; a paper mode and the simulator let you try it first (see [Algo trading](#algo-trading)).
+- **Algo trading (optional):** sells a chart's straddle by itself on a double bottom sell closing well below VWAP (30 points for NIFTY), on the weekdays set for that index, books half at a third of the target and the rest at the target, gets out on an X above VWAP, and closes everything at a set time; a paper mode and the simulator let you try it first (see [Algo trading](#algo-trading)).
 - **Comfortable charts:** hover any box for its price and the time it printed, zoom in and out, scroll through history, light and dark themes.
 - **Simulator:** replay past sessions minute by minute at 1X, 10X, 50X, 100X or 200X, with the same charts, overlays and signals, practise selling the straddles with live P&L, and watch the algo trade past days (see [Simulator](#simulator)).
 
@@ -323,7 +323,8 @@ Setup (Kite Connect app, redirect URL, static IP registration), how orders are s
 ## Algo trading
 
 The algo trades the three charts' straddles by itself, by fixed rules.
-It sells a straddle on a double bottom sell below VWAP and VWMA 10, books half the profit at a third of the target and the rest at the full target, and gets out on an X above the lower of VWAP and VWMA 10.
+It sells a straddle on a double bottom sell that closes a set number of points below VWAP (30 for NIFTY, 90 for SENSEX, 100 for BANKNIFTY), books half the profit at a third of the target and the rest at the full target, and gets out on an X above VWAP.
+Each index has its own trading days: by default NIFTY on Mondays, Tuesdays and Fridays, SENSEX on Wednesdays and Thursdays, and BANKNIFTY never (VWMA 10 played no part after the first backtest, at the user's choice).
 It places its orders through the same Kite connection as the Sell buttons (see [Trading through Kite](#trading-through-kite)), or trades on paper only.
 
 It runs in the server, not in the page.
@@ -341,14 +342,17 @@ The menu holds the settings below, today's algo trades with their P&L (an open o
 | **Mode** | Paper | **Paper** records the trades the algo would make, at the chart's prices, without placing any order; **Live** places real orders through Kite. It can be changed only while the algo is Off and manages no trade. |
 | **Quantity** | NIFTY 1690, BANKNIFTY 720, SENSEX 480 | Units of the CE and of the PE sold per trade, set for each index: whole lots, at least 2 lots (so a trade can be halved), and at most twice the default (see [Size cap](#size-cap)). |
 | **Target Points** | NIFTY 30, BANKNIFTY 99, SENSEX 90 | Straddle points (CE + PE) at which the whole trade is booked; half is booked at a third of them. |
+| **Below VWAP by** | NIFTY 30, SENSEX 90, BANKNIFTY 100 | Straddle points the signal's close must be under VWAP to be traded (0 = merely below VWAP). |
+| **Days** | NIFTY Mon, Tue, Fri; SENSEX Wed, Thu; BANKNIFTY none | The weekdays the algo trades that index; on the others it cannot be switched On for it. |
 | **Simultaneous Trades** | 1 | The most algo trades open at once across the three charts (1 to 3); one chart never has more than one. |
-| **Last entry** | 14:45 | No new trades after this time; open trades are still managed. |
+| **First entry** | 09:10 | No trades at closes before this time. |
+| **Last entry** | 14:45 | No trades at closes from this time on; open trades are still managed. |
 | **Exit Time** | 15:12 | Every open algo trade is bought back at this time, in profit or in loss, and the algo switches Off for the day (at the latest 15:25, before Zerodha's 15:26 square-off). |
 | **Max loss per trade** | ₹1,00,000 | A trade that has lost this much is bought back at once. |
 | **Daily loss limit** | ₹1,00,000 | When the day's algo trades have lost this much in all, every open algo trade is bought back and the algo switches Off for the day. |
 | **Max trades per day** | 5 | No new trades after this many in a day. |
 
-Quantity and Target Points are set for the index on screen; the rest apply to every index.
+Quantity, Target Points, Below VWAP by and Days are set for the index on screen; the rest apply to every index.
 A setting is saved as soon as you leave its field or press Enter (Esc undoes the edit), and a value that cannot be used is refused with the reason under the field.
 Quantity, Target Points and Max loss per trade are fixed for a trade when it opens, so changing them affects only new trades; the other settings apply at once.
 At the defaults a trade is 26 lots of NIFTY (65 each), 24 lots of BANKNIFTY (30 each) or 24 lots of SENSEX (20 each), about half of what one order may carry on each exchange.
@@ -358,9 +362,9 @@ At the defaults a trade is 26 lots of NIFTY (65 each), 24 lots of BANKNIFTY (30 
 At every 1-minute close, the algo sells a chart's straddle when all of these hold:
 
 1. That close confirms a double bottom sell: an O column falls one box below the previous O column's bottom.
-2. The close is below VWAP and below VWMA 10.
+2. The close is at least **Below VWAP by** points under VWAP (30 for NIFTY: a close of 180.00 with VWAP at 210.00 qualifies, 185.00 does not).
 3. That chart has no open algo trade, and fewer algo trades are open than **Simultaneous Trades** allows.
-4. Fewer than **Max trades per day** trades were opened today, the daily loss limit has not been hit, and it is **Last entry** or earlier.
+4. Fewer than **Max trades per day** trades were opened today, the daily loss limit has not been hit, the close is at **First entry** or later and before **Last entry**, and today is one of the index's **Days**.
 5. No position of your own (from a Sell button or the Kite app) is open on that straddle (checked whenever Kite is connected, in Paper mode too).
 
 In Live mode it sells the CE and then straight away the PE, at market, as MIS, the index's **Quantity** of each, with the trade's own tag on both orders in Kite (`pnfalgo001` for the day's first trade, and so on).
@@ -372,7 +376,7 @@ The trade's entry price is the straddle price actually sold at: the CE's average
 
 | Rule | When | Then |
 | --- | --- | --- |
-| **Stop** | At a 1-minute close, the newest column is X and its highest X box is above the lower of VWAP and VWMA 10 | Buy back everything |
+| **Stop** | At a 1-minute close, the newest column is X and its highest X box is above VWAP | Buy back everything |
 | **First target** | A 1-minute close at or below the entry price minus a third of **Target Points** | Buy back half, and add a breakeven stop at the entry price for the rest |
 | **Breakeven** | After the first target, a 1-minute close at or above the entry price | Buy back the rest |
 | **Full target** | A 1-minute close at or below the entry price minus **Target Points** | Buy back the rest |
@@ -382,12 +386,12 @@ The trade's entry price is the straddle price actually sold at: the CE's average
 
 - **Whichever comes first:** after the first target, the stop keeps working next to the breakeven stop, so the rest goes on the first of the two.
 - **Prices:** a close is the chart's 1-minute close (CE + PE), the price the chart is built from.
-  VWAP and VWMA 10 are taken at the newest column, as the chart draws them, and move every minute.
+  VWAP is taken at the newest column, as the chart draws it, and moves every minute.
 - **Odd lots:** half of an odd number of lots is rounded up at the first target (25 lots: 13, then 12).
 
-Example: NIFTY 1690 (26 lots) sold at 180.00, with VWAP at 186.00 and VWMA 10 at 184.20.
+Example: NIFTY 1690 (26 lots) sold at 180.00, with VWAP at 186.00.
 
-- An X box above the lower of the two lines (184.20 at first) buys back all 1690.
+- An X box above VWAP (186.00 at first) buys back all 1690.
 - A close at 170.00 or below buys back 845 (13 lots); from then on, a close at 180.00 or above buys back the other 845.
 - A close at 150.00 or below buys back the last 845.
 - A live price of 239.17 (a loss of ₹1,00,000 on 1690) buys back everything at once.
@@ -395,7 +399,7 @@ Example: NIFTY 1690 (26 lots) sold at 180.00, with VWAP at 186.00 and VWMA 10 at
 
 ### Switching it On and Off
 
-- **On:** needs today's charts (rebuilt at 09:16 from the day's open), the live feed (the TOTP login) and, in Live mode, Kite connected.
+- **On:** needs today's charts (rebuilt at 09:16 from the day's open), one of the index's Days, the live feed (the TOTP login) and, in Live mode, Kite connected.
   Before it starts, the button shows what will be traded (index, expiry, the three strikes, quantity, target and mode) for you to confirm.
 - **What it trades:** the index, expiry and strikes on screen.
   While the algo is On or managing a trade, the index, expiry, ATM and Days controls are locked, so the charts keep showing the straddles it trades.
@@ -444,11 +448,11 @@ This replaces the earlier `KITE_MAX_LOTS` setting (20 lots).
 
 ### What the page shows
 
-- **A line on each chart** (under its header): **Algo paper** or **Algo live**, then what the algo does there: watching for a double bottom sell, the open trade (quantity, entry, its stop and targets) with its live P&L and an **Exit** button that buys it back at market at once, or the last trade's result.
+- **A line on each chart** (under its header): **Algo paper** or **Algo live**, then what the algo does there: watching for a double bottom sell below VWAP, the open trade (quantity, entry, its stop and targets) with its live P&L and an **Exit** button that buys it back at market at once, or the last trade's result.
 - **Marks on the chart** for an open trade: dashed lines at its **Stop** (red) and its entry (**Sold**, grey; it becomes the red **BE** breakeven stop once half is booked), dotted green lines at **T1** and **T2**, each with its price on the axis.
   A red triangle pointing down marks where a trade sold, a green one pointing up where it bought back.
 - **Toasts and sounds:** a trade opening (two falling notes), part of it booked (two rising notes), a trade closed (three notes), and the alarms.
-- **The alert log** keeps every algo action and alarm and, while the algo is On, every double bottom sell that raised an alert but was not traded, with the reason (for example not below VWMA 10, no free slot, or after Last entry).
+- **The alert log** keeps every algo action and alarm and, while the algo is On, every double bottom sell that raised an alert but was not traded, with the reason (for example not far enough below VWAP, no free slot, or after Last entry).
 - Every 5 minutes the charts replace their live-built minutes with the exchange's official candles (see [Data and timing details](#data-and-timing-details)), which can move a box afterwards; the algo's decisions stay as they were made.
 
 ## Data and timing details
@@ -569,7 +573,7 @@ The **Algo** button in the playbar runs the [algo](#algo-trading) over the repla
 Its menu is the live page's, without the Mode choice and the Exit buttons.
 
 - **Switching it On:** load a run, then press **Algo**; it trades from the moment on the timeline (from the start of the run at "minute 0"), with no confirmation.
-- **Each session:** it switches itself On again at every later session's open, since nobody is there to do it, and goes Off at the Exit Time, after the daily loss limit or once Last entry has passed, as on the live page.
+- **Each session:** it switches itself On again at every later session's open that is one of the index's Days, since nobody is there to do it, and goes Off at the Exit Time, after the daily loss limit or once Last entry has passed, as on the live page.
 - **Prices:** it trades at the minute closes the charts are built from; Max loss per trade and the Daily loss limit also watch the four price steps within each minute.
   Slippage and charges are left out.
 - **What you see:** the line under each chart's header, the lines and triangles on the charts, the day's trades in the Algo menu, and a toast for each algo action (with a sound for a trade opened, booked or closed) while the replay plays.

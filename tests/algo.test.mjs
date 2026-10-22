@@ -53,7 +53,7 @@ const state = (over = {}) => ({
   day: '2026-10-12',
   trades: [],
   summary: { underlying: 'NIFTY', expiry: '2026-10-13', strikes: [22100, 22300, 22500], mode: 'paper', qty: 1690, lotSize: 65, target: 30 },
-  settings: { maxOpen: 1, lastEntry: '14:45', exitTime: '15:12', maxLoss: 100000, dailyLoss: 100000, maxTrades: 5 },
+  settings: { maxOpen: 1, firstEntry: '09:10', lastEntry: '14:45', exitTime: '15:12', maxLoss: 100000, dailyLoss: 100000, maxTrades: 5, belowVwap: { NIFTY: 30 }, days: { NIFTY: [0, 1, 4] } },
   ...over,
 });
 
@@ -141,7 +141,9 @@ test('the On confirmation says exactly what will trade', () => {
   assert.equal(rows.Charts, 'NIFTY · 13 Oct expiry · 22,100 / 22,300 / 22,500');
   assert.equal(rows.Quantity, '1,690 per trade (26 lots of 65)');
   assert.equal(rows.Target, '30 points; half booked at 10');
-  assert.equal(rows.Times, 'entries until 14:45; everything closed at 15:12');
+  assert.equal(rows.Times, 'entries from 09:10 to before 14:45; everything closed at 15:12');
+  assert.equal(rows.Entry, 'a double bottom sell closing 30 points below VWAP');
+  assert.equal(rows.Days, 'NIFTY on Mon, Tue, Fri');
   assert.equal(rows.Limits, '₹1,00,000 per trade, ₹1,00,000 per day, 5 trades a day');
   const live = Object.fromEntries(onSummary(state({ summary: { ...state().summary, mode: 'live' } })));
   assert.equal(live.Mode, 'Live: real orders through Kite (MIS)');

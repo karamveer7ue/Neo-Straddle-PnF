@@ -80,6 +80,8 @@ class Rig:
         await self.broker.refresh()
         self.runner = runner or AlgoRunner(self.eng, self.broker, state_file=self.state_file)
         self.runner.start()
+        if runner is None:  # the scripted charts were written for plain "below VWAP"
+            self.runner.update_settings({"belowVwap": {"NIFTY": 0}})
         self.queue = self.runner.subscribe()
 
     def chart(self, key: str = "atm"):
@@ -190,6 +192,9 @@ def test_switching_on_needs_the_live_feed_and_a_matching_confirmation(rig):
         with pytest.raises(Exception, match="Go live first"):
             rig.runner.switch_on()
         rig.eng.feed_state = "live"
+        rig.clock["t"] = BASE + timedelta(days=2)  # a Wednesday: not a NIFTY day
+        assert rig.runner.start_problem() == "NIFTY is not traded on Wednesdays (Days, in the Algo menu)."
+        rig.clock["t"] = BASE
         stale = {**rig.runner.summary(), "qty": 1300}  # the page showed another quantity
         with pytest.raises(Exception, match="changed meanwhile"):
             rig.runner.switch_on(stale)

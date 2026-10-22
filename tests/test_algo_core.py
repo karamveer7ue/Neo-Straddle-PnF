@@ -48,7 +48,7 @@ MONDAY = date(2026, 10, 12)
 EXPIRY = date(2026, 10, 13)
 BASE = datetime(2026, 10, 12, 9, 15, tzinfo=IST)
 
-# A rising zigzag, then a double bottom sell at 208 (bar 18), below VWAP (210.68) and VWMA 10 (212.75).
+# A rising zigzag, then a double bottom sell at 208 (bar 18), below VWAP (210.68).
 ENTRY = [200, 210, 206, 211, 207, 212, 208, 213, 209, 214, 210, 215, 211, 216, 212, 216, 211, 214, 208]
 SIGNAL_BAR = len(ENTRY) - 1
 # From the entry at 208 with NIFTY's target of 30: first target 198, full target 178.
@@ -140,8 +140,14 @@ def kinds(events: list[dict]) -> list[str]:
     return [e["kind"] for e in events if e["kind"] != "state"]
 
 
+def plain(**changes) -> Settings:
+    """Settings with no margin under VWAP (the scripts here were written for plain "below
+    VWAP"; the margin has its own tests), plus `changes`."""
+    return Settings().updated({"belowVwap": {"NIFTY": 0, "SENSEX": 0, "BANKNIFTY": 0}, **changes})
+
+
 def switched_on(**changes) -> AlgoCore:
-    core = AlgoCore(Settings().updated(changes) if changes else Settings())
+    core = AlgoCore(plain(**changes))
     core.switch_on(BASE)
     core.take_events()
     return core
@@ -161,8 +167,16 @@ def test_defaults_are_the_agreed_ones():
     s = Settings()
     assert s.qty == {"NIFTY": 1690, "BANKNIFTY": 720, "SENSEX": 480}
     assert s.target == {"NIFTY": 30.0, "BANKNIFTY": 99.0, "SENSEX": 90.0}
-    assert (s.mode, s.max_open, s.last_entry, s.exit_time) == (PAPER, 1, "14:45", "15:12")
+    assert (s.mode, s.max_open, s.first_entry, s.last_entry, s.exit_time) == (
+        PAPER,
+        1,
+        "09:10",
+        "14:45",
+        "15:12",
+    )
+    assert s.below_vwap == {"NIFTY": 30.0, "BANKNIFTY": 100.0, "SENSEX": 90.0}  # points under VWAP to enter
     assert (s.max_loss, s.daily_loss, s.max_trades) == (100_000, 100_000, 5)
+    assert s.days == {"NIFTY": [0, 1, 4], "BANKNIFTY": [], "SENSEX": [2, 3]}  # Mon Tue Fri; never; Wed Thu
     # Every sell from the app is capped at twice the default quantity.
     caps = {k: u.max_sell_qty for k, u in UNDERLYINGS.items()}
     assert caps == {"NIFTY": 3380, "BANKNIFTY": 1440, "SENSEX": 960}
@@ -229,13 +243,13 @@ def test_rupees_and_lots():
 # ---------------- Entries ----------------
 
 
-def test_a_double_bottom_sell_below_vwap_and_vwma_opens_a_trade():
+def test_a_double_bottom_sell_below_vwap_opens_a_trade():
     core, market = entered()
     [t] = core.trades
     assert (t.state, t.mode, t.qty, t.lot_size, t.chart) == (OPEN, PAPER, 1690, 65, "atm")
     assert (t.entry, t.target1, t.target2, t.want) == (208.0, 198.0, 178.0, 1690)
     assert t.signal["ts"] == ts(SIGNAL_BAR) and t.signal["close"] == 208.0
-    assert t.signal["vwap"] == pytest.approx(210.684, abs=1e-3) and t.signal["vwma"] == 212.75
+    assert t.signal["vwap"] == pytest.approx(210.684, abs=1e-3) and "vwma" not in t.signal
     assert t.opened_at == ts(SIGNAL_BAR + 1)  # at that bar's close
     assert kinds(market.events) == ["opened"]
     assert market.events[-1]["detail"] == (
@@ -245,20 +259,36 @@ def test_a_double_bottom_sell_below_vwap_and_vwma_opens_a_trade():
     assert [e["title"] for e in market.events] == ["Algo sold NIFTY 25,000 ATM (paper)"]
 
 
-def test_below_vwap_but_not_below_vwma_is_not_traded_and_says_why():
-    # Yesterday traded low (VWMA 10 still remembers it); today gapped up, so VWAP restarted high.
+def test_only_vwap_counts_vwma_does_not():
+    # Yesterday traded low, so VWMA 10 sits far under today's prices; today gapped up and
+    # VWAP restarted high. The user dropped VWMA 10 from the rules: below VWAP alone trades.
     friday = datetime(2026, 10, 9, 9, 15, tzinfo=IST)
     yesterday = [150, 158, 154, 159, 155, 160, 156, 161, 157, 162, 158, 163, 159]
     history = {"atm": [(ts(i, friday), float(c), 1000) for i, c in enumerate(yesterday)]}
     core = switched_on()
     market = Market({"atm": [200, 205, 201, 204, 200, 203, 198]}, history=history)
     events = market.run(core)
+    t = core.trades[0]  # (stopped by the X to 203, then sold again at 198)
+    assert t.entry == 200.0 and t.stop["level"] == pytest.approx(202.17)  # VWAP then
+    assert kinds(events)[0] == "opened"
+
+
+def test_an_index_is_traded_only_on_its_days():
+    wednesday = datetime(2026, 10, 14, 9, 15, tzinfo=IST)
+    core = AlgoCore(plain())
+    core.switch_on(wednesday)
+    core.take_events()
+    events = Market({"atm": ENTRY}, start=wednesday).run(core)
     assert core.trades == []
-    assert [(e["kind"], e["detail"]) for e in events] == [
-        ("skipped", "the close 200.00 is not below VWMA 10 (175.47)"),
-        ("skipped", "the close 198.00 is not below VWMA 10 (183.14)"),
-    ]
-    assert events[0]["title"] == "Algo did not trade a double bottom sell: NIFTY 25,000 ATM"
+    assert [(e["kind"], e["detail"]) for e in events] == [("skipped", "NIFTY is not traded on Wednesdays")]
+    core = AlgoCore(plain(days={"NIFTY": [2]}))  # Wednesdays only, then
+    core.switch_on(wednesday)
+    Market({"atm": ENTRY}, start=wednesday).run(core)
+    assert len(core.trades) == 1
+    assert Settings().updated({"days": {"SENSEX": [4, 0, 0]}}).days["SENSEX"] == [0, 4]
+    for bad in ([5], ["Mon"], [True], 2):
+        with pytest.raises(SettingsError, match="Weekdays, Monday to Friday"):
+            Settings().updated({"days": {"NIFTY": bad}})
 
 
 def test_no_trades_while_off():
@@ -303,7 +333,34 @@ def test_entries_stop_at_max_trades_and_after_the_last_entry_time():
     core = switched_on(lastEntry="09:30", exitTime="15:12")
     events = Market({"atm": ENTRY}).run(core)  # the signal bar closes at 09:34
     assert core.trades == []
-    assert [e["detail"] for e in events] == ["after the Last entry time (09:30)"]
+    assert [e["detail"] for e in events] == ["not before the Last entry time (09:30)"]
+    core = switched_on(lastEntry="09:34")  # "before": a close at 09:34 itself is too late
+    assert Market({"atm": ENTRY}).run(core)[-1]["detail"] == "not before the Last entry time (09:34)"
+    core = switched_on(firstEntry="09:40", lastEntry="09:50")
+    assert Market({"atm": ENTRY}).run(core)[-1]["detail"] == "before the First entry time (09:40)"
+
+
+def test_the_close_must_be_the_margin_below_vwap():
+    # The signal closes at 208 with VWAP at 210.68: 2.68 points under it.
+    core = AlgoCore(Settings())  # NIFTY's default margin of 30
+    core.switch_on(BASE)
+    core.take_events()
+    events = Market({"atm": ENTRY}).run(core)
+    assert core.trades == []
+    assert [(e["kind"], e["detail"]) for e in events] == [
+        ("skipped", "the close 208.00 is not 30 points below VWAP (210.68)")
+    ]
+    assert events[0]["title"] == "Algo did not trade a double bottom sell: NIFTY 25,000 ATM"
+    core = switched_on(belowVwap={"NIFTY": 2.5})
+    Market({"atm": ENTRY}).run(core, 0, SIGNAL_BAR + 1)
+    assert len(core.trades) == 1
+    core = switched_on(belowVwap={"NIFTY": 2.7})
+    Market({"atm": ENTRY}).run(core, 0, SIGNAL_BAR + 1)
+    assert core.trades == []
+    with pytest.raises(SettingsError, match="Between 0 and 10,000 points"):
+        Settings().updated({"belowVwap": {"NIFTY": -1}})
+    with pytest.raises(SettingsError, match="Before the Last entry time"):
+        Settings().updated({"firstEntry": "14:45"})
 
 
 def test_your_own_position_on_the_straddle_or_odd_lots_block_an_entry():
@@ -347,24 +404,23 @@ def test_an_x_above_the_lower_line_stops_the_whole_trade():
     events = market.run(core, SIGNAL_BAR + 1)
     [t] = core.trades
     assert (t.state, t.reason, t.pnl()) == (CLOSED, STOP, pytest.approx(-5_070))
-    assert events[-1]["detail"] == (
-        "Stop: an X above the lower of VWAP and VWMA 10 · bought back 1,690 @ 211.00 · sold at 208.00"
-    )
+    assert events[-1]["detail"] == ("Stop: an X above VWAP · bought back 1,690 @ 211.00 · sold at 208.00")
 
 
 def test_after_the_half_the_stop_still_works_alongside_breakeven():
-    # A long stretch low after the first target pulls the lower line (VWMA 10) under the
-    # entry; an X above it at 200 stops the rest in profit, before any breakeven.
+    # A long stretch low after the first target pulls VWAP under the entry; an X above
+    # it at 205 stops the rest in profit, before any breakeven (a close at 208 or more).
     low = [198, 196, 199, 196] * 5
-    core, market = entered([*TO_FIRST_TARGET, *low, 200])
+    core, market = entered([*TO_FIRST_TARGET, *low, 205])
     market.run(core, SIGNAL_BAR + 1)
     [t] = core.trades
     assert [d.reason for d in t.exits] == [TARGET1, STOP]
-    assert t.pnl() == pytest.approx(845 * 10 + 845 * 8)
+    assert t.stop["level"] < 205 < t.entry
+    assert t.pnl() == pytest.approx(845 * 10 + 845 * 3)
 
 
 def test_odd_lots_book_the_larger_half_first():
-    core = switched_on(qty={"SENSEX": 500})  # 25 lots of 20
+    core = switched_on(qty={"SENSEX": 500}, days={"SENSEX": [0]})  # 25 lots of 20; traded this Monday
     market = Market({"atm": [*ENTRY, 205, 202, 199, 178]}, underlying="SENSEX", lot=20)
     market.run(core)
     [t] = core.trades

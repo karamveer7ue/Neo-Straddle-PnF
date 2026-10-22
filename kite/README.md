@@ -104,6 +104,10 @@ Setting it up:
    `check` shows the address of that version (and the other, unused one); an "IP (2a02:...) is not allowed" error means Kite saw an address you have not registered.
 5. Restart the app (`./start.sh --restart`).
 
+**After updating the app,** run `check` again: when the app's signed requests have changed (as on 2026-10-16), the uploaded `kite-route.php` refuses every order until it is replaced.
+`check` then says "kite-route.php ... is older than this app"; do steps 2 and 3 again.
+A wrong secret gets its own message.
+
 **Shared hosting and Kite's IP rules:** on shared hosting (such as Hostinger's web hosting plans), the outgoing IP is shared with the other sites on the same server.
 Kite links an IP to one account only ("already linked to another account" when registering means another Kite user on that server got there first), SEBI's rules allow sharing an IP only within a family, and the host may move your site to another server (and IP) without notice - orders then fail with "IP ... is not allowed" until you register the new one (`check` shows it).
 A VPS or a hosting plan with a dedicated IP avoids all three.

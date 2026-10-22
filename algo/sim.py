@@ -6,8 +6,8 @@ steps the page plays (open, the two extremes, close) are the live prices the los
 limits watch; at the minute's close the 1-minute rules run on the chart as the page
 draws it, the context day included. The algo trades from `start_at` (when it was
 switched On in the replay); at each later session's open it switches itself On
-again (a replay has nobody to do it), and it goes Off at the Exit Time as on the
-live page.
+again (a replay has nobody to do it), on the weekdays the index is traded (Days), and
+it goes Off at the Exit Time as on the live page.
 
 The page shows the run as of any moment of the replay, scrubbing back included, so
 every trade comes with `frames` (its state each time it changed) and `stops` (the
@@ -105,7 +105,8 @@ def simulate(run: dict, settings: Settings, start_at: int | None = None) -> dict
         if start.date() != day:
             day = start.date()
             core.on_clock(start, prices)  # a new session: the day's counters start afresh
-        if not core.on and ts >= begin and not core.exit_time_done and not core.halted:
+        traded = settings.trades_on(underlying, start.date())
+        if not core.on and traded and ts >= begin and not core.exit_time_done and not core.halted:
             try:
                 core.switch_on(start)
             except AlgoError:

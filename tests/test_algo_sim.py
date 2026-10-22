@@ -6,10 +6,10 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from algo.core import CLOSED, MAX_LOSS, OPEN, TARGET, TARGET1, Settings
+from algo.core import CLOSED, MAX_LOSS, OPEN, TARGET, TARGET1
 from algo.sim import leg_keys, simulate
 from pnf.series import IST
-from tests.test_algo_core import ENTRY, SIGNAL_BAR, TO_FIRST_TARGET, split
+from tests.test_algo_core import ENTRY, SIGNAL_BAR, TO_FIRST_TARGET, plain, split
 
 MONDAY = datetime(2026, 10, 12, 9, 15, tzinfo=IST)
 
@@ -58,7 +58,7 @@ def frame_at(trade: dict, t: int) -> dict | None:
 
 
 def test_the_same_trades_as_the_live_rules():
-    result = simulate(run_of(rows([*ENTRY, *TO_FIRST_TARGET, 195, 190, 185, 180, 178])), Settings())
+    result = simulate(run_of(rows([*ENTRY, *TO_FIRST_TARGET, 195, 190, 185, 180, 178])), plain())
     [trade] = result["trades"]
     last = trade["frames"][-1]["view"]
     assert (last["state"], last["reason"], last["booked"]) == (CLOSED, TARGET, 33_800)
@@ -71,7 +71,7 @@ def test_the_same_trades_as_the_live_rules():
 
 
 def test_the_page_can_show_any_moment_of_the_replay():
-    result = simulate(run_of(rows([*ENTRY, *TO_FIRST_TARGET, 195, 190, 185, 180, 178])), Settings())
+    result = simulate(run_of(rows([*ENTRY, *TO_FIRST_TARGET, 195, 190, 185, 180, 178])), plain())
     [trade] = result["trades"]
     opened = ts(SIGNAL_BAR + 1)  # the signal bar's close
     assert frame_at(trade, opened - 1) is None  # not sold yet
@@ -90,7 +90,7 @@ def test_a_loss_limit_inside_a_minute_exits_at_that_step():
     # The minute after the entry spikes to 270 and closes back at 209: the max loss acts
     # on the spike (a live price), not on the close.
     series = rows([*ENTRY, 209], paths={SIGNAL_BAR + 1: [209, 270, 205, 209]})
-    result = simulate(run_of(series), Settings())
+    result = simulate(run_of(series), plain())
     [trade] = result["trades"]
     last = trade["frames"][-1]["view"]
     assert (last["state"], last["reason"]) == (CLOSED, MAX_LOSS)
@@ -100,13 +100,13 @@ def test_a_loss_limit_inside_a_minute_exits_at_that_step():
 
 def test_switched_on_mid_replay_it_trades_only_from_then():
     series = rows([*ENTRY, *TO_FIRST_TARGET])
-    assert simulate(run_of(series), Settings(), start_at=ts(SIGNAL_BAR + 2))["trades"] == []
-    assert len(simulate(run_of(series), Settings(), start_at=ts(SIGNAL_BAR))["trades"]) == 1
+    assert simulate(run_of(series), plain(), start_at=ts(SIGNAL_BAR + 2))["trades"] == []
+    assert len(simulate(run_of(series), plain(), start_at=ts(SIGNAL_BAR))["trades"]) == 1
 
 
 def test_each_session_starts_on_and_the_exit_time_closes_it():
     tuesday = MONDAY + timedelta(days=1)
-    s = Settings().updated({"lastEntry": "09:35", "exitTime": "09:36"})
+    s = plain(lastEntry="09:35", exitTime="09:36")
     monday = rows([*ENTRY, 207, 207, 207])  # sold at 09:34, closed at 09:36
     result = simulate(run_of(monday + rows([*ENTRY, 207, 207, 207], start=tuesday)), s)
     assert len(result["trades"]) == 2  # Tuesday traded again
@@ -118,7 +118,7 @@ def test_each_session_starts_on_and_the_exit_time_closes_it():
 def test_the_context_day_is_chart_history_and_never_traded():
     friday = MONDAY - timedelta(days=3)
     context = rows(ENTRY, start=friday)  # a qualifying signal on the context day
-    result = simulate(run_of(rows([209, 210, 209]), context=context), Settings())
+    result = simulate(run_of(rows([209, 210, 209]), context=context), plain())
     assert result["trades"] == []
 
 
@@ -133,14 +133,14 @@ def test_a_month_of_minutes_replays_in_a_few_seconds():
     charts = (("atm_minus", -200), ("atm", 0), ("atm_plus", 200))
     run["charts"] = [{**run["charts"][0], "key": k, "offset": o} for k, o in charts]
     began = time.perf_counter()
-    result = simulate(run, Settings().updated({"maxOpen": 3, "maxTrades": 50}))
+    result = simulate(run, plain(maxOpen=3, maxTrades=50))
     assert time.perf_counter() - began < 8
     assert result["total"]["trades"] > 30
 
 
 @pytest.mark.parametrize("mode", ["paper", "live"])
 def test_the_replay_is_always_on_paper(mode):
-    result = simulate(run_of(rows(ENTRY)), Settings().updated({"mode": mode}))
+    result = simulate(run_of(rows(ENTRY)), plain(mode=mode))
     assert result["settings"]["mode"] == "paper"
     assert result["trades"][0]["frames"][0]["view"]["mode"] == "paper"
 
@@ -164,5 +164,18 @@ def test_the_simulators_algo_endpoint():
     assert http.post("/api/algo", json={"run": "gone", "settings": {}}).status_code == 409
     odd = http.post("/api/algo", json={"run": "NIFTY|run", "settings": {"qty": {"NIFTY": 1700}}})
     assert odd.json()["detail"]["errors"] == {"qty.NIFTY": "A multiple of the lot size, 65"}
-    result = http.post("/api/algo", json={"run": "NIFTY|run", "settings": {}}).json()
+    result = http.post("/api/algo", json={"run": "NIFTY|run", "settings": {"belowVwap": {"NIFTY": 0}}}).json()
     assert result["total"]["trades"] == 1 and result["settings"]["mode"] == "paper"
+    # With the default margin (30 points under VWAP) this script's signal is not traded.
+    assert http.post("/api/algo", json={"run": "NIFTY|run", "settings": {}}).json()["total"]["trades"] == 0
+
+
+def test_a_run_on_a_day_the_index_is_not_traded_makes_no_trades():
+    wednesday = datetime(2026, 10, 14, 9, 15, tzinfo=IST)
+    out = simulate(run_of(rows(ENTRY + TO_FIRST_TARGET, start=wednesday)), plain())
+    assert out["trades"] == [] and out["total"]["trades"] == 0
+    assert all(e["kind"] != "opened" for e in out["events"])
+    traded = simulate(
+        run_of(rows(ENTRY + TO_FIRST_TARGET, start=wednesday)), plain(**{"days": {"NIFTY": [2]}})
+    )
+    assert traded["total"]["trades"] == 1

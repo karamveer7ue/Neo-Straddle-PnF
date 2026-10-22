@@ -40,6 +40,7 @@ from .core import (
     SettingsError,
     quantity_problem,
     trade_json,
+    weekday_name,
 )
 from .live import EXIT_TIMEOUT, LiveExecutor
 
@@ -278,12 +279,14 @@ class AlgoRunner:
             return "The charts are not ready yet."
         if eng.underlying_key != eng.built_u.key:
             return "The charts are switching to another index."
+        u = eng.built_u.key
+        if not s.trades_on(u, self.now().date()):
+            return f"{u} is not traded on {weekday_name(self.now())}s (Days, in the Algo menu)."
         if eng.built_for != (self.now().date(), True):
             # Before then the strikes are yesterday's, or today's before the 09:16 rebuild.
             return "Today's charts are not built yet: they are rebuilt at 09:16 from today's open."
         if not self.feed_live():
             return "Go live first: the algo needs the live feed (enter the TOTP)."
-        u = eng.built_u.key
         if s.mode == LIVE:
             if self.broker is None or not self.broker.configured:
                 return "Kite is not set up (see kite/README.md), so only Paper mode can run."

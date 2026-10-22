@@ -191,7 +191,7 @@ async function loadOptions(underlying = state.underlying) {
     state.underlying = underlying;
     state.pendingUnderlying = null;
     state.options = opts;
-    algo.setOptions(opts.algo);
+    algo.setOptions(opts.algo, opts.underlying.key);
     renderUnderlyings(opts.underlyings);
     els.expiry.replaceChildren(...opts.expiries.map((iso) =>
       new Option(`${fmtDate(iso)} · ${fmtDate(iso, { weekday: 'short' })}`, iso)));

@@ -30,6 +30,8 @@ class Underlying:
     max_order_qty: int  # the exchange's freeze quantity: the most one option order may carry
     algo_qty: int  # the algo's default quantity per trade (units of the CE and of the PE)
     algo_target: int  # the algo's default Target Points (straddle points)
+    algo_days: tuple[int, ...]  # the weekdays (Monday = 0) the algo trades it by default
+    algo_below_vwap: int  # the algo enters only this many straddle points below VWAP
     weekly: bool = True  # lists weekly expiries; BANKNIFTY has monthlies only
 
     @property
@@ -72,6 +74,8 @@ UNDERLYINGS = {
         max_order_qty=3510,
         algo_qty=1690,
         algo_target=30,
+        algo_days=(0, 1, 4),  # Monday, Tuesday, Friday
+        algo_below_vwap=30,
     ),
     "BANKNIFTY": Underlying(
         "BANKNIFTY",
@@ -83,6 +87,8 @@ UNDERLYINGS = {
         max_order_qty=1440,
         algo_qty=720,
         algo_target=99,
+        algo_days=(),  # not traded by the algo
+        algo_below_vwap=100,
         weekly=False,
     ),
     "SENSEX": Underlying(
@@ -95,6 +101,8 @@ UNDERLYINGS = {
         max_order_qty=1000,
         algo_qty=480,
         algo_target=90,
+        algo_days=(2, 3),  # Wednesday, Thursday
+        algo_below_vwap=90,
     ),
 }
 DEFAULT_UNDERLYING = "NIFTY"

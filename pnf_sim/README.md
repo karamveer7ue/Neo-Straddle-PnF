@@ -72,7 +72,7 @@ The **Algo** button in the playbar runs the live page's [algo](../README.md#algo
 Its menu is the live page's, without the Mode choice and the Exit buttons.
 
 - **Switching it On:** load a run, then press **Algo**; it trades from the moment on the timeline (from the start of the run at "minute 0"), with no confirmation.
-- **Each session:** it switches itself On again at every later session's open, since nobody is there to do it, and goes Off at the Exit Time, after the daily loss limit or once Last entry has passed, as on the live page.
+- **Each session:** it switches itself On again at every later session's open that is one of the index's Days, since nobody is there to do it, and goes Off at the Exit Time, after the daily loss limit or once Last entry has passed, as on the live page.
 - **Prices:** it trades at the minute closes the charts are built from; Max loss per trade and the Daily loss limit also watch the four price steps within each minute.
   Slippage and charges are left out.
 - **What you see:** the line under each chart's header, the lines and triangles on the charts, the day's trades in the Algo menu, and a toast for each algo action (with a sound for a trade opened, booked or closed) while the replay plays.

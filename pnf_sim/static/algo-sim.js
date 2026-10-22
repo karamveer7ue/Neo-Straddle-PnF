@@ -53,6 +53,7 @@ function latest(frames, t, at = (f) => f.at) {
 export function createSimAlgo({ now }) {
   const sim = {
     options: null, // /api/options' algo part: settings, caps, defaults
+    underlying: 'NIFTY', // the index menu's choice (the settings shown until a run is loaded)
     settings: readSettings(),
     run: null,
     on: false,
@@ -82,7 +83,9 @@ export function createSimAlgo({ now }) {
     },
     async saveSettings(changes) {
       const merged = { ...settings(), ...changes };
-      for (const key of ['qty', 'target']) if (changes[key]) merged[key] = { ...settings()[key], ...changes[key] };
+      for (const key of ['qty', 'target', 'days', 'belowVwap']) {
+        if (changes[key]) merged[key] = { ...settings()[key], ...changes[key] };
+      }
       const checked = await postAlgo({ run: null, settings: merged });
       sim.settings = checked.settings;
       storeSettings(sim.settings);
@@ -115,7 +118,7 @@ export function createSimAlgo({ now }) {
     const t = now();
     const st = settings();
     const run = sim.run;
-    const u = run?.underlying.key ?? 'NIFTY';
+    const u = run?.underlying.key ?? sim.underlying;
     const status = sim.result ? latest(sim.result.status, t) : null;
     const trades = [];
     for (const tr of sim.result?.trades ?? []) {
@@ -161,9 +164,10 @@ export function createSimAlgo({ now }) {
     mount({ topbar, before, banner }) {
       ui.mount({ topbar, before, banner });
     },
-    /** The options' algo part arrived: defaults for the menu. */
-    setOptions(algo) {
+    /** The options' algo part arrived for `underlying`: defaults for the menu. */
+    setOptions(algo, underlying) {
       sim.options = algo;
+      sim.underlying = underlying;
       ui.setConnected(true);
       render();
     },

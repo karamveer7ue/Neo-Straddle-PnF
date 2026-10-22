@@ -33,6 +33,12 @@ PHP_TEMPLATE = Path(__file__).parent / "relay" / "kite-route.php"
 PHP_UPLOAD = ROOT / "relay-upload" / "kite-route.php"  # gitignored: holds the secret
 SECRET_PLACEHOLDER = "PASTE-KITE_RELAY_SECRET-FROM-.env-HERE"
 RELAYED_METHODS = ("POST", "PUT", "DELETE")
+BAD_SIGNATURE = (
+    "Order relay refused the signature, so nothing was sent to Kite. "
+    "kite-route.php on the host is probably older than this app: run "
+    "`.venv/bin/python -m kite.order_relay php` and upload relay-upload/kite-route.php again "
+    "(`.venv/bin/python -m kite.order_relay check` tells it apart from a wrong secret)."
+)
 HOST_REFUSALS = (401, 403, 404, 405)  # web-host replies that mean the relay script never ran
 MIN_SECRET_LENGTH = 32
 SECRET_CHARS = re.compile(r"[A-Za-z0-9_-]+")  # pasted into a PHP string literal by write_php
@@ -109,18 +115,26 @@ class RelayAuth(requests.auth.AuthBase):
             if auth:
                 r.headers["X-Kite-Authorization"] = auth
             r.url = f"{self.url}?path={quote(target, safe='')}"
-            r.register_hook("response", self._explain_host_refusal)
+            r.register_hook("response", self._explain_refusal)
         return r
 
-    def _explain_host_refusal(self, res: requests.Response, *args, **kwargs) -> requests.Response:
-        """The web host's own refusal (an HTML 404 or firewall 403: the relay never ran, so
-        nothing reached Kite) as a Kite-style error, instead of an unreadable reply that
-        would count as an order of unknown outcome."""
+    def _explain_refusal(self, res: requests.Response, *args, **kwargs) -> requests.Response:
+        """Refusals that never reached Kite, as Kite-style errors that say what to do.
+
+        - The web host's own refusal (an HTML 404 or firewall 403: the relay never ran),
+          instead of an unreadable reply that would count as an order of unknown outcome.
+        - The relay's "bad signature": nearly always a kite-route.php older than this
+          app (the signature changed), not a wrong secret - say so first.
+        """
+        message = None
         if res.status_code in HOST_REFUSALS and "json" not in res.headers.get("Content-Type", ""):
             message = (
                 f"Order relay: {self.url} answered {res.status_code} - is kite-route.php uploaded there, "
                 "and not blocked by the host's firewall?"
             )
+        elif res.status_code == 403 and b"bad signature" in res.content:
+            message = BAD_SIGNATURE
+        if message:
             res._content = json.dumps(
                 {"status": "error", "error_type": "PermissionException", "message": message}
             ).encode()
@@ -144,9 +158,39 @@ def whoami(url: str, secret: str, timeout: float = 15) -> dict:
     except ValueError:
         hint = " - is kite-route.php uploaded there?" if res.status_code == 404 else ""
         raise RuntimeError(f"{url} answered {res.status_code}, not the relay{hint}") from None
+    if res.status_code == 403 and "bad signature" in str(data.get("message")):
+        raise RuntimeError(_diagnose_bad_signature(url, secret, timeout))
     if res.status_code != 200 or data.get("status") != "success":
         raise RuntimeError(f"The relay answered {res.status_code}: {data.get('message') or data}")
     return data["data"]
+
+
+def _diagnose_bad_signature(url: str, secret: str, timeout: float) -> str:
+    """Why the relay refused the signature: an out-of-date kite-route.php (it accepts
+    the signature format used before 2026-10-16) or a secret that differs."""
+    timestamp = str(int(time.time()))
+    legacy = hmac.new(secret.encode(), f"{timestamp}\nGET\nwhoami\n".encode(), hashlib.sha256).hexdigest()
+    try:
+        res = requests.get(
+            url,
+            params={"path": "whoami"},
+            headers={"X-Relay-Timestamp": timestamp, "X-Relay-Signature": legacy},
+            timeout=timeout,
+        )
+        outdated = res.status_code == 200
+    except requests.RequestException:
+        outdated = False
+    if outdated:
+        return (
+            f"kite-route.php at {url} is older than this app (the secret matches, the signature format "
+            "does not), so it refuses every order. Run `.venv/bin/python -m kite.order_relay php` and "
+            "upload relay-upload/kite-route.php in its place."
+        )
+    return (
+        f"The relay at {url} refused the signature: RELAY_SECRET in the uploaded kite-route.php differs "
+        "from KITE_RELAY_SECRET in .env. Run `.venv/bin/python -m kite.order_relay php` and upload "
+        "relay-upload/kite-route.php in its place."
+    )
 
 
 def write_php(secret: str, out: Path = PHP_UPLOAD) -> Path:

@@ -16,6 +16,9 @@ export const fmtPrice = (p) =>
   p == null ? '–' : p.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const fmtClock = (epoch) => clockFmt.format(epoch * 1000);
 export const fmtExpiry = (iso) => (iso ? dateFmt.format(new Date(`${iso}T00:00:00+05:30`)) : '');
+export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+/** "Mon, Tue, Fri", or "none" */
+export const fmtDays = (days) => (days?.length ? days.map((d) => WEEKDAYS[d]).join(', ') : 'none');
 export const chartLabel = (offset) => (offset === 0 ? 'ATM' : `ATM ${offset > 0 ? '+' : MINUS} ${Math.abs(offset)}`);
 
 /** Whole rupees typed with or without separators ("1,00,000"); NaN when not a number. */
@@ -81,7 +84,7 @@ export function describeTrade(t) {
   if (!t.managed) return { what: `Yours: ${short}`, levels: 'Algo Off: no targets or stops' };
   if (t.want < t.holding) return { what: `Buying back ${fmtQty(t.holding - t.want)}…`, levels: short };
   // The stop first: on a narrow chart the end of the line is cut off, and the targets are drawn.
-  const stop = `Stop: X above ${t.stop ? fmtPrice(t.stop.level) : 'VWAP / VWMA 10'}`;
+  const stop = `Stop: X above ${t.stop ? fmtPrice(t.stop.level) : 'VWAP'}`;
   if (t.halfDone) {
     return { what: `${short} · half booked`, levels: `${stop} or back at ${fmtPrice(t.entry)} · T2 ${fmtPrice(t.target2)}` };
   }
@@ -154,8 +157,10 @@ export function onSummary(s) {
     ['Charts', `${m.underlying} · ${fmtExpiry(m.expiry)} expiry · ${m.strikes.map((k) => k.toLocaleString('en-IN')).join(' / ')}`],
     ['Quantity', `${fmtQty(m.qty)} per trade${lots ? ` (${lots} lots of ${m.lotSize})` : ''}`],
     ['Target', `${m.target} points; half booked at ${third}`],
+    ['Entry', `a double bottom sell closing ${st.belowVwap?.[m.underlying] ?? 0} points below VWAP`],
+    ['Days', `${m.underlying} on ${fmtDays(st.days?.[m.underlying])}`],
     ['At once', `${st.maxOpen} trade${st.maxOpen > 1 ? 's' : ''} across the three charts`],
-    ['Times', `entries until ${st.lastEntry}; everything closed at ${st.exitTime}`],
+    ['Times', `entries from ${st.firstEntry} to before ${st.lastEntry}; everything closed at ${st.exitTime}`],
     ['Limits', `${fmtInr(st.maxLoss)} per trade, ${fmtInr(st.dailyLoss)} per day, ${st.maxTrades} trades a day`],
   ];
 }
