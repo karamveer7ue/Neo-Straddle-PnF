@@ -1,0 +1,88 @@
+Create web html based 3 'point & figure' charts on screen for NIFTY straddle, one at ATM straddle, one at ATM - 200 points straddle and one at ATM + 200 points straddle. All three should be visible one next to the other horizontally on the screen. Point & figure charts should be based on 1-min and 0.5%. Ask me anything if you need more details. Fetch the past data from historic api and live data with websocket. You can ask for TOTP on the web interface itself (only if required). Full details of the API is available at https://github.com/Kotak-Neo/kotak-neo-python
+
+
+I should be able to choose expiry from the drop down. Show maximum of 4 expiries: upcoming weekly expiry, next weekly expiry, this monthly expiry and next month's monthly expiry.
+
+Also, Mark 'double bottom sell' and 'double top buy' on the charts. do give a visual and audio alert when that happens.
+
+Add VWAP (Volume-Weighted Average Price) on each Straddle chart in yellow color.
+
+mark the double bottom sell and double bottom buy as a bar above the previous 2 candles, in green or red color.
+
+Also plot "single moving average" of 10 in light black color. allow me to choose between the VWAP and single moving average.
+
+Keep a log of all the alerts given which I can view. keep the last 30 such alerts.
+
+On the top of the page, show the index price as well as the future price.
+
+Allow me to draw a horizontal chart in light white color with Alt+H button. I should be able to move this line up and down and should be able to select and delete it with the delete key.
+
+--------
+
+Without touching any of the existing files, create a very similar new page, let's call it "simulator", which will take the index (nifty/sensex), start_date and end_date. This will simulate the movement on these 3 straddles for that day (which is older than today, make sure of that). The simulation should be able to run at 1X, 50X,100X  and 200X. Ask me if you need any questions answered before proceeding.
+
+In the simulator, start the chart loaded with one day of the chart already loaded. This should be the day just before the "FROM" day, so that the new chart simulation should start with the existing chart, this will make VWAP more accurate.
+
+In the simulator, simulate buying and selling as well. show the "Sell" button as the bottom of all 3 straddle charts. When the "Sell" button is pressed,simulate a straddle sell and show profit and loss for it there only. When in trade, show "Exit 50%" and "Exit Full" to simulate the exit from the trade.
+
+—--
+
+This is the API details of Zerodha Kite at https://kite.trade/docs/pykiteconnect/v4/ Using these apis, create an order placement and tracking (positions and profit & loss) of the orders we place through this interface. Create all Kite related order placement content in the "kite" folder, so that it is easy to manage. At the bottom of the chart on pnf, provide space for entering quantity and "Sell" button. When a sell position is already in, on the top of the screen show the positions and their current profit and loss. At the bottom of the screen, show the option of "Exit 50%", "Exit Full" buttons to exit my positions. These buttons should only come on charts where I have taken positions and not on others.
+
+
+—----
+
+We want to create algo trading for automatic sell (entry) and buy (exit) trades in 'point & figure' straddle.
+
+There should be a button on the top bar saying Algo (On/Off - default Off).
+
+Add a top ‘Algo’ menu and add a few options in it.
+The first option will be ‘quantity’ (default: 1690 for NIFTY, 500 for SENSEX, 720 for BANKNIFTY). 
+
+NIFTY: 51L
+SENSEX: 36L
+BANKNIFTY: 45K
+
+The second option is ‘Simultaneous Trades’ (default; 1) - this is the number of total trades the algo can take in all 3 straddle charts together (only one trade can run live on one straddle chart). Not more than this number.
+
+The third option will define ‘Target Points’. This is the number of points when gained, the algo will book profit. Default for NIFTY is 30, Default for SENSEX IS 90, default for BANKNIFTY is 99.
+
+The fourth option will be ‘Exit Time’. This will be the time when we exit all of our trade, irrespective of if they are profit or loss. The default exit time is 15:12.
+
+Fifth option: Max loss per trade
+
+Sixth option: Max loss per day
+
+Sevenths option: Max trades per day
+
+ALGO:
+
+ENTRY:
+Enter the trade with the defined quantity when: 'double bottom sell' is formed with an ‘O’ at one minute close AND price is below ‘VWAP’ AND price is below ‘VWMA 10’ and there is no trade running on this straddle chart already. There can be only 1 trade (max) per straddle chart.
+Last entry time 14:45.
+
+NEW ENTRY CONDITION:
+Enter the trade when all the following conditions are met:
+1. Double bottom is formed with an ‘O’ at one minute candle
+2. Price is below ‘VWAP - 30’ for NIFTY, ‘VWAP - 90’ for SENSEX and ‘VWAP - 100’ for BANKNIFTY
+3. The time is after 9:10AM and before 2:45PM
+4. These is no existing trade running for that straddle
+
+EXIT:
+Exit 50% of the quantity when 1/3rd  of the ‘Target Points’ is reached and in this case, set the ‘Stop Loss’ to the ‘Buy Price’ for the remaining quantity of this trade.
+Book remaining 50% of quantity profit when ‘Target Points’ are reached from the buying point.
+If any trades are running at the ‘Exit Time’ (defined above), we exit it completely. No trades should be running after the ‘Exit Time’.
+
+Let’s drop ‘VWAP-10’ completely from algo.
+A fixed-percentage stop, 5% of the straddle, for the first hour.
+
+
+STOP LOSS:
+Condition 1: Our stop loss is set (and updated every minute) to the lowest of ‘VWAP’ AND ‘VWMA 10’ price. When a 1-minute ‘X’ is formed above the ‘VWAP’ or ‘VWMA 10’ (whichever is lower), we exit the full trade.
+
+Condition 2: When 50% of the quantity is already booked at 1/3rd of ‘Target points’, set the stop loss to the buying price of the trade. Keep it fixed and do not move it after this.
+
+This is the first time I am setting up an algo so I'm a bit worried and scared. Do ask me a lot of questions to confirm and make sure everything is set up correctly.
+
+Do create and save a full log of the trades taken by this interface (manual or with algo) and create a P&l reports on trade level, day level, week level, month level and year level. I should be able to see these logs anytime in the future.
+
